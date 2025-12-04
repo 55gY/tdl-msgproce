@@ -73,49 +73,128 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 
 // fetchChannelHistory 获取频道历史消息
 func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID int64) error {
+	fmt.Printf("📥 正在获取频道 %d 的历史消息...\n", channelID)
+
+	// 构造 InputPeerChannel
 	inputPeer := &tg.InputPeerChannel{
 		ChannelID:  channelID,
-		AccessHash: 0, // 通常需要从缓存获取
+		AccessHash: 0, // 需要从对话列表中获取
 	}
 
-	history, err := p.api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
-		Peer:  inputPeer,
-		Limit: 100,
+	// 尝试通过 ChannelsGetChannels 获取频道信息
+	channel, err := p.api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
+		&tg.InputChannel{
+			ChannelID:  channelID,
+			AccessHash: 0,
+		},
 	})
-	if err != nil {
-		return err
-	}
 
-	switch h := history.(type) {
-	case *tg.MessagesChannelMessages:
-		// 简化处理，直接处理消息
-		for _, msg := range h.Messages {
-			if m, ok := msg.(*tg.Message); ok {
-				// 构建简单的 entities（如果需要的话）
-				entities := tg.Entities{
-					Users: make(map[int64]*tg.User),
-					Chats: make(map[int64]*tg.Chat),
+	if err != nil {
+		// 如果失败，从对话列表中查找 AccessHash
+		dialogs, err := p.api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			OffsetDate: 0,
+			OffsetID:   0,
+			OffsetPeer: &tg.InputPeerEmpty{},
+			Limit:      100,
+			Hash:       0,
+		})
+
+		if err != nil {
+			return fmt.Errorf("获取对话列表失败: %w", err)
+		}
+
+		// 查找对应的频道
+		var accessHash int64
+		var foundChannel *tg.Channel
+		switch d := dialogs.(type) {
+		case *tg.MessagesDialogs:
+			for _, chat := range d.Chats {
+				if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelID {
+					accessHash = ch.AccessHash
+					foundChannel = ch
+					break
 				}
-				// 填充 users
-				for _, user := range h.Users {
-					if u, ok := user.(*tg.User); ok {
-						entities.Users[u.ID] = u
-					}
+			}
+		case *tg.MessagesDialogsSlice:
+			for _, chat := range d.Chats {
+				if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelID {
+					accessHash = ch.AccessHash
+					foundChannel = ch
+					break
 				}
-				// 填充 chats
-				for _, chat := range h.Chats {
-					if c, ok := chat.(*tg.Chat); ok {
-						entities.Chats[c.ID] = c
-					} else if ch, ok := chat.(*tg.Channel); ok {
-						// Channel 转换为 Chat 的方式
-						entities.Chats[ch.ID] = &tg.Chat{ID: ch.ID, Title: ch.Title}
-					}
+			}
+		}
+
+		if foundChannel == nil {
+			return fmt.Errorf("未找到频道 %d，请确认已加入该频道", channelID)
+		}
+
+		fmt.Printf("📢 频道名称: %s\n", foundChannel.Title)
+		inputPeer.AccessHash = accessHash
+	} else {
+		// 成功获取频道信息
+		switch chats := channel.(type) {
+		case *tg.MessagesChats:
+			if len(chats.Chats) > 0 {
+				if ch, ok := chats.Chats[0].(*tg.Channel); ok {
+					fmt.Printf("📢 频道名称: %s\n", ch.Title)
+					inputPeer.AccessHash = ch.AccessHash
 				}
-				p.handleMessage(ctx, m, entities)
 			}
 		}
 	}
 
+	// 获取历史消息
+	history, err := p.api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+		Peer:       inputPeer,
+		OffsetID:   0,
+		OffsetDate: 0,
+		AddOffset:  0,
+		Limit:      100, // 获取最近100条
+		MaxID:      0,
+		MinID:      0,
+		Hash:       0,
+	})
+
+	if err != nil {
+		return fmt.Errorf("获取历史消息失败: %w", err)
+	}
+
+	// 处理历史消息
+	var messages []tg.MessageClass
+	switch h := history.(type) {
+	case *tg.MessagesMessages:
+		messages = h.Messages
+	case *tg.MessagesMessagesSlice:
+		messages = h.Messages
+	case *tg.MessagesChannelMessages:
+		messages = h.Messages
+	}
+
+	fmt.Printf("📊 获取到 %d 条历史消息\n", len(messages))
+
+	// 处理每条消息
+	matchCount := 0
+	for i := len(messages) - 1; i >= 0; i-- { // 倒序处理，从旧到新
+		msg, ok := messages[i].(*tg.Message)
+		if !ok {
+			continue
+		}
+
+		// 构建 entities（简化版）
+		entities := tg.Entities{
+			Users: make(map[int64]*tg.User),
+			Chats: make(map[int64]*tg.Chat),
+		}
+
+		// 使用现有的 handleMessage 处理
+		err := p.handleMessage(ctx, msg, entities)
+		if err == nil {
+			matchCount++
+		}
+	}
+
+	fmt.Printf("✅ 频道 %d: 处理了 %d 条消息\n", channelID, matchCount)
 	return nil
 }
 
