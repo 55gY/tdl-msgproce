@@ -1,0 +1,125 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # 匹配版本号标签，如 v1.0.0, v2.1.3
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build for Linux AMD64
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -ldflags="-s -w -X main.Version=${{ steps.get_version.outputs.VERSION }}" -o tdl-msgproce_linux_amd64
+          chmod +x tdl-msgproce_linux_amd64
+
+      - name: Build for Windows AMD64
+        env:
+          CGO_ENABLED: 0
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build -ldflags="-s -w -X main.Version=${{ steps.get_version.outputs.VERSION }}" -o tdl-msgproce_windows_amd64.exe
+
+      - name: Calculate checksums
+        run: |
+          sha256sum tdl-msgproce_linux_amd64 > checksums.txt
+          sha256sum tdl-msgproce_windows_amd64.exe >> checksums.txt
+          cat checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            tdl-msgproce_linux_amd64
+            tdl-msgproce_windows_amd64.exe
+            checksums.txt
+            config.yaml
+            install.sh
+          body: |
+            ## tdl-msgproce ${{ steps.get_version.outputs.VERSION }}
+            
+            ### 📦 下载说明
+            
+            - **Linux AMD64**: `tdl-msgproce_linux_amd64`
+            - **Windows AMD64**: `tdl-msgproce_windows_amd64.exe`
+            
+            ### 🚀 快速安装
+            
+            **Linux:**
+            ```bash
+            # 下载安装脚本
+            wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.VERSION }}/install.sh
+            chmod +x install.sh
+            
+            # 下载二进制文件
+            wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.VERSION }}/tdl-msgproce_linux_amd64
+            mv tdl-msgproce_linux_amd64 tdl-msgproce
+            
+            # 运行安装脚本
+            ./install.sh
+            ```
+            
+            **Windows:**
+            ```powershell
+            # 下载并重命名
+            Invoke-WebRequest -Uri "https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.VERSION }}/tdl-msgproce_windows_amd64.exe" -OutFile "tdl-msgproce.exe"
+            ```
+            
+            ### 📝 配置说明
+            
+            1. 下载 `config.yaml` 配置文件模板
+            2. 根据需要修改配置：
+               - `bot.token` - Telegram Bot Token
+               - `subscription_api.api_key` - API 密钥
+               - `subscription_api.add_url` - 订阅 API 地址
+               - `monitor.channels` - 监听的频道 ID
+            
+            ### 🔐 校验和
+            
+            使用 `checksums.txt` 验证文件完整性：
+            ```bash
+            sha256sum -c checksums.txt
+            ```
+            
+            ### 📖 完整文档
+            
+            详见项目 README.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            tdl-msgproce_linux_amd64
+            tdl-msgproce_windows_amd64.exe
+            checksums.txt
+          retention-days: 7

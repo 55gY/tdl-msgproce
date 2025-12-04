@@ -1,0 +1,68 @@
+# tdl-msgproce 扩展配置文件
+# 融合三个功能：消息监听 + Bot交互 + 转发
+
+# ==================== Telegram Bot 配置 ====================
+bot:
+  enabled: true  # 是否启用 Bot 功能
+  token: ""  # Bot Token
+  
+  # 允许使用的用户列表（留空表示所有用户都可以使用）
+  allowed_users: []  # 例如: [123456789, 987654321]
+  
+  # 转发目标
+  forward_target: 1838605845  # 转发到这个 chat ID
+  
+  # 转发模式
+  forward_mode: "clone"  # clone 或 copy
+
+# ==================== 消息监听配置 ====================
+monitor:
+  enabled: true  # 是否启用消息监听功能
+  
+  # 订阅 API 配置
+  subscription_api:
+    api_key: "123456"                                          # API 密钥
+    add_url: ""  # 添加订阅的完整 URL
+
+  # 获取历史消息功能
+  features:
+    fetch_history_enabled: true  # 是否在启动时获取历史消息
+
+  # 要监听的频道ID列表
+  channels:
+    - 2582776039
+    - 1338209352
+    - 1965523384
+    - 1914963500
+    - 1695276861
+    - 2817717177
+    - 1313311705
+
+  # 白名单频道 - 这些频道不经过二次内容过滤
+  whitelist_channels:
+    - 1313311705
+
+  # 过滤配置
+  filters:
+    # 关键词列表 - 消息必须包含这些关键词之一
+    keywords:
+      - "https://"
+      - "http://"
+
+    # 内容过滤 - 二次过滤，消息内容必须包含这些词之一
+    content_filter:
+      - "投稿"
+      - "订阅"
+
+    # 链接黑名单 - 包含这些关键字的链接不显示
+    link_blacklist:
+      - "register"
+      - "t.me"
+      - ".jpg"
+      - ".jpeg"
+      - ".png"
+      - ".gif"
+      - ".webp"
+      - ".bmp"
+      - "go1.569521.xyz"
+

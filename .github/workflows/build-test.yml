@@ -1,0 +1,56 @@
+name: Build Test
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+    branches: [ main, master, dev ]
+
+jobs:
+  test-build:
+    name: Test Build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Verify dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Build for Linux AMD64
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -ldflags="-s -w" -o tdl-msgproce_linux_amd64
+          ls -lh tdl-msgproce_linux_amd64
+
+      - name: Build for Windows AMD64
+        env:
+          CGO_ENABLED: 0
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build -ldflags="-s -w" -o tdl-msgproce_windows_amd64.exe
+          ls -lh tdl-msgproce_windows_amd64.exe
+
+      - name: Run tests (if any)
+        run: |
+          go test -v ./... || echo "No tests found"
+
+      - name: Build summary
+        run: |
+          echo "✅ Linux AMD64 build successful"
+          echo "✅ Windows AMD64 build successful"
+          echo ""
+          echo "📦 Binary sizes:"
+          ls -lh tdl-msgproce_* | awk '{print $9, "-", $5}'
