@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*.*.*'  # 匹配版本号标签，如 v1.0.0, v2.1.3
+    branches:
+      - main
+      - master
 
 permissions:
   contents: write
@@ -19,16 +22,70 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check if commit message contains version tag
+        id: check_version
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          echo "Commit message: $COMMIT_MSG"
+          
+          # 从提交消息中提取版本号（支持 v1.0.0 或 1.0.0 格式）
+          if [[ "$COMMIT_MSG" =~ (v?[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+            # 确保版本号以 v 开头
+            if [[ ! "$VERSION" =~ ^v ]]; then
+              VERSION="v$VERSION"
+            fi
+            echo "Found version: $VERSION"
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            echo "HAS_VERSION=true" >> $GITHUB_OUTPUT
+          else
+            echo "No version tag found in commit message"
+            echo "HAS_VERSION=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip if no version in commit message
+        if: steps.check_version.outputs.HAS_VERSION != 'true'
+        run: |
+          echo "⏭️  跳过 Release：提交消息中未包含版本号"
+          echo "提示：在提交消息中包含 v1.0.0 格式的版本号来触发 Release"
+          exit 0
+
+      - name: Create and push tag
+        if: steps.check_version.outputs.HAS_VERSION == 'true' && github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: |
+          VERSION="${{ steps.check_version.outputs.VERSION }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 检查标签是否已存在
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists, skipping tag creation"
+          else
+            git tag -a "$VERSION" -m "Release $VERSION"
+            git push origin "$VERSION"
+            echo "✅ Created and pushed tag: $VERSION"
+          fi
+
       - name: Set up Go
+        if: steps.check_version.outputs.HAS_VERSION == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
 
-      - name: Get version from tag
+      - name: Get version from tag or commit
+        if: steps.check_version.outputs.HAS_VERSION == 'true'
         id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="${{ steps.check_version.outputs.VERSION }}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
 
       - name: Build for Linux AMD64
+        if: steps.check_version.outputs.HAS_VERSION == 'true'
         env:
           CGO_ENABLED: 0
           GOOS: linux
@@ -38,6 +95,7 @@ jobs:
           chmod +x tdl-msgproce_linux_amd64
 
       - name: Build for Windows AMD64
+        if: steps.check_version.outputs.HAS_VERSION == 'true'
         env:
           CGO_ENABLED: 0
           GOOS: windows
@@ -46,14 +104,18 @@ jobs:
           go build -ldflags="-s -w -X main.Version=${{ steps.get_version.outputs.VERSION }}" -o tdl-msgproce_windows_amd64.exe
 
       - name: Calculate checksums
+        if: steps.check_version.outputs.HAS_VERSION == 'true'
         run: |
           sha256sum tdl-msgproce_linux_amd64 > checksums.txt
           sha256sum tdl-msgproce_windows_amd64.exe >> checksums.txt
           cat checksums.txt
 
       - name: Create Release
+        if: steps.check_version.outputs.HAS_VERSION == 'true'
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          name: Release ${{ steps.get_version.outputs.VERSION }}
           files: |
             tdl-msgproce_linux_amd64
             tdl-msgproce_windows_amd64.exe
@@ -115,6 +177,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifacts
+        if: steps.check_version.outputs.HAS_VERSION == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: binaries
