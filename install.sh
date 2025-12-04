@@ -95,27 +95,67 @@ download_tdl() {
     
     echo "最新版本: $latest_version"
     
-    # 构建下载链接
-    local download_url="https://github.com/iyear/tdl/releases/download/${latest_version}/tdl_${os}_${arch}.tar.gz"
+    # 构建下载链接（修正大小写）
+    local os_proper=""
+    local arch_proper=""
+    
+    # tdl 使用 Linux/Darwin 首字母大写
+    if [ "$os" == "linux" ]; then
+        os_proper="Linux"
+    elif [ "$os" == "darwin" ]; then
+        os_proper="Darwin"
+    else
+        os_proper="$os"
+    fi
+    
+    # tdl 使用特定的架构命名
+    case "$arch" in
+        amd64)
+            arch_proper="64bit"
+            ;;
+        arm64)
+            arch_proper="arm64"
+            ;;
+        armv7)
+            arch_proper="armv7"
+            ;;
+        *)
+            arch_proper="$arch"
+            ;;
+    esac
+    
+    local download_url="https://github.com/iyear/tdl/releases/download/${latest_version}/tdl_${os_proper}_${arch_proper}.tar.gz"
     local tmp_file="/tmp/tdl_${latest_version}.tar.gz"
     
     echo "下载地址: $download_url"
     echo "下载中..."
     
+    # 删除旧的临时文件
+    rm -f "$tmp_file"
+    
     if curl -L -o "$tmp_file" "$download_url"; then
-        echo "解压中..."
-        mkdir -p /root/.tdl
-        tar -xzf "$tmp_file" -C /tmp/
-        
-        if [ -f "/tmp/tdl" ]; then
-            mv /tmp/tdl "$TDL_PATH"
-            chmod +x "$TDL_PATH"
-            rm -f "$tmp_file"
-            echo -e "${GREEN}✅ tdl 下载成功${NC}"
-            $TDL_PATH version
-            return 0
+        # 验证下载的文件是否为 gzip 格式
+        if file "$tmp_file" | grep -q "gzip"; then
+            echo "解压中..."
+            mkdir -p /root/.tdl
+            tar -xzf "$tmp_file" -C /tmp/
+            
+            if [ -f "/tmp/tdl" ]; then
+                mv /tmp/tdl "$TDL_PATH"
+                chmod +x "$TDL_PATH"
+                rm -f "$tmp_file"
+                echo -e "${GREEN}✅ tdl 下载成功${NC}"
+                $TDL_PATH version
+                return 0
+            else
+                echo -e "${RED}解压后未找到 tdl 文件${NC}"
+                rm -f "$tmp_file"
+                return 1
+            fi
         else
-            echo -e "${RED}解压失败${NC}"
+            echo -e "${RED}下载的文件格式不正确（可能是 404 页面）${NC}"
+            echo "文件类型: $(file "$tmp_file")"
+            rm -f "$tmp_file"
             return 1
         fi
     else
@@ -138,6 +178,18 @@ download_msgproce() {
         return 1
     fi
     
+    # 只支持 Linux 和 Darwin 的 amd64
+    if [ "$os" != "linux" ] && [ "$os" != "darwin" ]; then
+        echo -e "${RED}当前只支持 Linux 和 macOS${NC}"
+        return 1
+    fi
+    
+    if [ "$arch" != "amd64" ]; then
+        echo -e "${RED}当前只支持 amd64 架构${NC}"
+        echo -e "${YELLOW}请从源码编译或等待其他架构支持${NC}"
+        return 1
+    fi
+    
     echo "检测到系统: $os/$arch"
     
     # 获取最新版本
@@ -152,22 +204,34 @@ download_msgproce() {
     
     echo "最新版本: $latest_version"
     
-    # 构建下载链接
-    local download_url="https://github.com/55gY/tdl-msgproce/releases/download/${latest_version}/tdl-msgproce_${os}_${arch}"
-    local tmp_file="/tmp/tdl-msgproce"
+    # 构建下载链接（匹配 workflow 命名规则）
+    local download_url="https://github.com/55gY/tdl-msgproce/releases/download/${latest_version}/tdl-msgproce_${os}_amd64"
+    local tmp_file="/tmp/tdl-msgproce_${latest_version}"
     
     echo "下载地址: $download_url"
     echo "下载中..."
     
+    # 删除旧的临时文件
+    rm -f "$tmp_file"
+    
     if curl -L -o "$tmp_file" "$download_url"; then
-        mkdir -p "$EXTENSION_DIR"
-        mv "$tmp_file" "$MSGPROCE_PATH"
-        chmod +x "$MSGPROCE_PATH"
-        echo -e "${GREEN}✅ tdl-msgproce 下载成功${NC}"
-        return 0
+        # 验证下载的文件是否为可执行文件
+        if file "$tmp_file" | grep -qE "(executable|ELF)"; then
+            mkdir -p "$EXTENSION_DIR"
+            mv "$tmp_file" "$MSGPROCE_PATH"
+            chmod +x "$MSGPROCE_PATH"
+            echo -e "${GREEN}✅ tdl-msgproce 下载成功${NC}"
+            return 0
+        else
+            echo -e "${RED}下载的文件格式不正确（可能是 404 页面）${NC}"
+            echo "文件类型: $(file "$tmp_file")"
+            rm -f "$tmp_file"
+            return 1
+        fi
     else
         echo -e "${RED}下载失败${NC}"
         echo -e "${YELLOW}请手动下载并安装: ${MSGPROCE_RELEASE_URL}${NC}"
+        rm -f "$tmp_file"
         return 1
     fi
 }
