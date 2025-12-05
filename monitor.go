@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
@@ -200,38 +202,84 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 
 // addSubscription 添加订阅
 func (p *MessageProcessor) addSubscription(link string) error {
+	if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
+		return fmt.Errorf("订阅 API 未配置")
+	}
+
 	// 使用配置文件中的完整 URL
-	url := p.config.Monitor.SubscriptionAPI.AddURL
+	apiURL := p.config.Monitor.SubscriptionAPI.AddURL
 
-	payload := map[string]interface{}{
-		"sub_url": link,
+	// 构建请求体
+	type SubscriptionRequest struct {
+		SubURL string `json:"sub_url"`
 	}
 
-	jsonData, err := json.Marshal(payload)
+	reqBody := SubscriptionRequest{SubURL: link}
+	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		return err
+		return fmt.Errorf("JSON 序列化失败: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	// 创建请求
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return err
+		return fmt.Errorf("创建请求失败: %w", err)
 	}
 
+	req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
 
-	client := &http.Client{}
+	// 发送请求
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("API 请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API 返回错误状态码: %d", resp.StatusCode)
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取响应失败: %w", err)
 	}
 
-	return nil
+	// 解析响应
+	type SubscriptionResponse struct {
+		Message string `json:"message"`
+		Error   string `json:"error"`
+	}
+
+	var response SubscriptionResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("解析响应失败 (状态码: %d): %w", resp.StatusCode, err)
+	}
+
+	// 处理响应
+	if resp.StatusCode == 200 {
+		successMsg := response.Message
+		if successMsg == "" {
+			successMsg = "订阅添加成功"
+		}
+		p.ext.Log().Info("订阅添加成功", zap.String("link", link), zap.String("message", successMsg))
+		return nil
+	}
+
+	// 错误处理
+	errorMsg := response.Error
+	if errorMsg == "" {
+		errorMsg = response.Message
+	}
+	if errorMsg == "" {
+		errorMsg = fmt.Sprintf("订阅添加失败 (状态码: %d)", resp.StatusCode)
+	}
+
+	// 特殊处理重复订阅（不作为错误）
+	if strings.Contains(errorMsg, "已存在") || strings.Contains(strings.ToLower(errorMsg), "already exists") {
+		p.ext.Log().Debug("订阅已存在", zap.String("link", link))
+		return nil // 不返回错误，避免重复日志
+	}
+
+	return fmt.Errorf("%s", errorMsg)
 }
 
 // 辅助函数
