@@ -204,7 +204,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 	url := p.config.Monitor.SubscriptionAPI.AddURL
 
 	payload := map[string]interface{}{
-		"url": link,
+		"sub_url": link,
 	}
 
 	jsonData, err := json.Marshal(payload)

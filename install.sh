@@ -206,9 +206,10 @@ download_msgproce() {
     
     # 构建下载链接（匹配 workflow 命名规则）
     local download_url="https://github.com/55gY/tdl-msgproce/releases/download/${latest_version}/tdl-msgproce_${os}_amd64"
-    local tmp_file="/tmp/tdl-msgproce_${latest_version}"
+    local tmp_file="/tmp/tdl-msgproce_${os}_amd64"
     
     echo "下载地址: $download_url"
+    echo "下载到临时目录: $tmp_file"
     echo "下载中..."
     
     # 删除旧的临时文件
@@ -217,10 +218,8 @@ download_msgproce() {
     if curl -L -o "$tmp_file" "$download_url"; then
         # 验证下载的文件是否为可执行文件
         if file "$tmp_file" | grep -qE "(executable|ELF)"; then
-            mkdir -p "$EXTENSION_DIR"
-            mv "$tmp_file" "$MSGPROCE_PATH"
-            chmod +x "$MSGPROCE_PATH"
-            echo -e "${GREEN}✅ tdl-msgproce 下载成功${NC}"
+            chmod +x "$tmp_file"
+            echo -e "${GREEN}✅ tdl-msgproce 下载成功（临时文件）${NC}"
             return 0
         else
             echo -e "${RED}下载的文件格式不正确（可能是 404 页面）${NC}"
@@ -483,18 +482,20 @@ install_msgproce() {
         fi
     fi
     
-    # 尝试下载
+    local os=$(detect_os)
+    local tmp_file="/tmp/tdl-msgproce_${os}_amd64"
+    
+    # 尝试下载到 /tmp
     if ! download_msgproce; then
         # 下载失败，检查当前目录是否有编译好的文件
         echo ""
         echo -e "${YELLOW}尝试使用当前目录的文件...${NC}"
         
         if [ -f "./tdl-msgproce" ]; then
-            echo "发现本地文件，复制中..."
-            mkdir -p "$EXTENSION_DIR"
-            cp ./tdl-msgproce "$MSGPROCE_PATH"
-            chmod +x "$MSGPROCE_PATH"
-            echo -e "${GREEN}✅ 本地文件安装成功${NC}"
+            echo "发现本地文件，复制到临时目录..."
+            cp ./tdl-msgproce "$tmp_file"
+            chmod +x "$tmp_file"
+            echo -e "${GREEN}✅ 本地文件准备完成${NC}"
         else
             echo -e "${RED}当前目录也没有 tdl-msgproce 文件${NC}"
             echo ""
@@ -506,20 +507,39 @@ install_msgproce() {
         fi
     fi
     
+    # 验证临时文件存在
+    if [ ! -f "$tmp_file" ]; then
+        echo -e "${RED}错误: 临时文件不存在: $tmp_file${NC}"
+        return 1
+    fi
+    
     # 创建数据目录
     mkdir -p "$DATA_DIR/log"
     
     # 创建配置文件
     create_default_config
     
-    # 注册扩展到 tdl
+    # 重命名为正确的扩展名称（注册前）
+    local tmp_renamed="/tmp/tdl-msgproce"
     echo ""
+    echo -e "${YELLOW}准备注册文件...${NC}"
+    cp "$tmp_file" "$tmp_renamed"
+    chmod +x "$tmp_renamed"
+    echo "临时文件: $tmp_renamed"
+    
+    # 从临时目录注册扩展到 tdl（tdl 会自动复制文件）
     echo -e "${YELLOW}注册扩展到 tdl...${NC}"
-    if $TDL_PATH extension install --force "$MSGPROCE_PATH"; then
-        echo -e "${GREEN}✅ 扩展注册成功${NC}"
+    if $TDL_PATH extension install --force "$tmp_renamed"; then
+        echo -e "${GREEN}✅ 扩展注册成功（tdl 已自动复制文件）${NC}"
+        
+        # 清理临时文件
+        rm -f "$tmp_file" "$tmp_renamed"
+        echo -e "${GREEN}✅ 临时文件已清理${NC}"
     else
-        echo -e "${YELLOW}⚠️  扩展注册失败，可手动执行:${NC}"
-        echo "   $TDL_PATH extension install --force $MSGPROCE_PATH"
+        echo -e "${RED}⚠️  扩展注册失败${NC}"
+        echo -e "${YELLOW}可手动执行:${NC}"
+        echo "   $TDL_PATH extension install --force $tmp_renamed"
+        return 1
     fi
     
     echo -e "${GREEN}✅ msgproce 安装完成${NC}"
