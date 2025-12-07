@@ -404,6 +404,7 @@ type SubscriptionRequest struct {
 type SubscriptionResponse struct {
 	Message string `json:"message"`
 	Error   string `json:"error"`
+	SubURL  string `json:"sub_url"`
 }
 
 // addSubscriptionToAPI 添加订阅到 API
@@ -446,9 +447,20 @@ func (p *MessageProcessor) addSubscriptionToAPI(subURL string) (bool, string) {
 		return false, "❌ 读取响应失败"
 	}
 
+	// 记录原始响应（用于调试）
+	p.ext.Log().Debug("API 响应", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
+
 	var response SubscriptionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		p.ext.Log().Error("解析响应失败", zap.Error(err))
+		p.ext.Log().Error("解析响应失败",
+			zap.Error(err),
+			zap.String("body", string(body)),
+			zap.Int("status", resp.StatusCode))
+
+		// 如果是 200 状态码但解析失败，可能是纯文本响应
+		if resp.StatusCode == 200 {
+			return true, "✅ 订阅添加成功"
+		}
 		return false, fmt.Sprintf("❌ 订阅添加失败 (状态码: %d)", resp.StatusCode)
 	}
 
@@ -461,6 +473,17 @@ func (p *MessageProcessor) addSubscriptionToAPI(subURL string) (bool, string) {
 		return true, fmt.Sprintf("✅ %s", successMsg)
 	}
 
+	// 处理重复订阅（409 Conflict）
+	if resp.StatusCode == 409 || resp.StatusCode == http.StatusConflict {
+		errorMsg := response.Error
+		if errorMsg == "" {
+			errorMsg = "该订阅链接已存在"
+		}
+		p.ext.Log().Debug("订阅已存在", zap.String("url", subURL))
+		return false, fmt.Sprintf("⚠️ %s", errorMsg)
+	}
+
+	// 其他错误
 	errorMsg := response.Error
 	if errorMsg == "" {
 		errorMsg = response.Message
@@ -470,11 +493,6 @@ func (p *MessageProcessor) addSubscriptionToAPI(subURL string) (bool, string) {
 	}
 
 	p.ext.Log().Warn(fmt.Sprintf("订阅添加失败: %s", errorMsg))
-
-	// 特殊处理重复订阅
-	if strings.Contains(errorMsg, "已存在") || strings.Contains(strings.ToLower(errorMsg), "already exists") {
-		return false, fmt.Sprintf("⚠️ %s", errorMsg)
-	}
 	return false, fmt.Sprintf("❌ %s", errorMsg)
 }
 

@@ -243,14 +243,28 @@ func (p *MessageProcessor) addSubscription(link string) error {
 		return fmt.Errorf("读取响应失败: %w", err)
 	}
 
+	// 记录原始响应（用于调试）
+	p.ext.Log().Debug("API 响应", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
+
 	// 解析响应
 	type SubscriptionResponse struct {
 		Message string `json:"message"`
 		Error   string `json:"error"`
+		SubURL  string `json:"sub_url"`
 	}
 
 	var response SubscriptionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
+		p.ext.Log().Error("解析响应失败",
+			zap.Error(err),
+			zap.String("body", string(body)),
+			zap.Int("status", resp.StatusCode))
+
+		// 如果是 200 状态码但解析失败，可能是纯文本响应，视为成功
+		if resp.StatusCode == 200 {
+			p.ext.Log().Info("订阅添加成功（纯文本响应）", zap.String("link", link))
+			return nil
+		}
 		return fmt.Errorf("解析响应失败 (状态码: %d): %w", resp.StatusCode, err)
 	}
 
@@ -264,19 +278,23 @@ func (p *MessageProcessor) addSubscription(link string) error {
 		return nil
 	}
 
-	// 错误处理
+	// 处理重复订阅（409 Conflict）- 不作为错误
+	if resp.StatusCode == 409 || resp.StatusCode == http.StatusConflict {
+		errorMsg := response.Error
+		if errorMsg == "" {
+			errorMsg = "该订阅链接已存在"
+		}
+		p.ext.Log().Debug("订阅已存在", zap.String("link", link))
+		return nil // 不返回错误，避免重复日志
+	}
+
+	// 其他错误处理
 	errorMsg := response.Error
 	if errorMsg == "" {
 		errorMsg = response.Message
 	}
 	if errorMsg == "" {
 		errorMsg = fmt.Sprintf("订阅添加失败 (状态码: %d)", resp.StatusCode)
-	}
-
-	// 特殊处理重复订阅（不作为错误）
-	if strings.Contains(errorMsg, "已存在") || strings.Contains(strings.ToLower(errorMsg), "already exists") {
-		p.ext.Log().Debug("订阅已存在", zap.String("link", link))
-		return nil // 不返回错误，避免重复日志
 	}
 
 	return fmt.Errorf("%s", errorMsg)
