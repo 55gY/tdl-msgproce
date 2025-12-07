@@ -31,18 +31,27 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 		return nil
 	}
 
-	// 关键词过滤
-	if !matchAny(text, p.config.Monitor.Filters.Keywords) {
-		return nil
+	// 检查是否包含订阅格式或节点格式
+	hasSubsFormat := matchAny(text, p.config.Monitor.Filters.Subs)
+	hasNodeFormat := matchAny(text, p.config.Monitor.Filters.SS)
+
+	if !hasSubsFormat && !hasNodeFormat {
+		return nil // 既不是订阅也不是节点，跳过
 	}
 
 	// 白名单频道跳过二次过滤
 	isWhitelisted := contains(p.config.Monitor.WhitelistChannels, peerID)
-	if !isWhitelisted && len(p.config.Monitor.Filters.ContentFilter) > 0 {
-		if !matchAny(text, p.config.Monitor.Filters.ContentFilter) {
-			return nil
+
+	// 仅对订阅格式进行二次内容过滤（节点格式不进行二次过滤）
+	if hasSubsFormat && !hasNodeFormat {
+		// 纯订阅格式，需要二次过滤
+		if !isWhitelisted && len(p.config.Monitor.Filters.ContentFilter) > 0 {
+			if !matchAny(text, p.config.Monitor.Filters.ContentFilter) {
+				return nil
+			}
 		}
 	}
+	// 如果是节点格式（hasNodeFormat为true），则跳过二次过滤
 
 	// 提取链接
 	links := extractLinks(text)
@@ -63,10 +72,14 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 				zap.String("link", link),
 				zap.Error(err))
 		} else {
-			p.ext.Log().Info("新订阅",
+			linkType := "订阅"
+			if isProxyNode(link) {
+				linkType = "节点"
+			}
+			p.ext.Log().Info(fmt.Sprintf("新%s", linkType),
 				zap.Int64("channel", peerID),
 				zap.String("link", link))
-			fmt.Printf("✅ 新订阅: %s (频道: %d)\n", link, peerID)
+			fmt.Printf("✅ 新%s: %s (频道: %d)\n", linkType, link, peerID)
 		}
 	}
 
@@ -195,9 +208,8 @@ func (p *MessageProcessor) addSubscription(link string) error {
 }
 
 // fetchChannelHistory 获取频道历史消息
-func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID int64) error {
-	fmt.Printf("📥 正在获取频道 %d 的历史消息...\n", channelID)
-	fmt.Printf("📥 正在获取频道 %d 的历史消息...\n", channelID)
+func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID int64, limit int) error {
+	fmt.Printf("📥 正在获取频道 %d 的历史消息（最多 %d 条）...\n", channelID, limit)
 
 	// 构造 InputPeerChannel
 	inputPeer := &tg.InputPeerChannel{
@@ -274,7 +286,7 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 		OffsetID:   0,
 		OffsetDate: 0,
 		AddOffset:  0,
-		Limit:      100, // 获取最近100条
+		Limit:      limit, // 使用配置的数量
 		MaxID:      0,
 		MinID:      0,
 		Hash:       0,

@@ -26,7 +26,7 @@ monitor:
 
   # 获取历史消息功能
   features:
-    fetch_history_enabled: true  # 是否在启动时获取历史消息
+    fetch_history_count: 100  # 获取历史消息数量（>0 则开启并获取指定数量，<=0 则关闭功能）
 
   # 要监听的频道ID列表
   channels:
@@ -44,10 +44,22 @@ monitor:
 
   # 过滤配置
   filters:
-    # 关键词列表 - 消息必须包含这些关键词之一
-    keywords:
+    # 订阅格式过滤 - 订阅链接必须包含这些关键词之一，会进行二次内容过滤
+    subs:
       - "https://"
       - "http://"
+    # 节点格式过滤 - 全频道/群组 不受监听频道列表控制 - 节点链接必须匹配这些协议之一，不进行二次内容过滤
+    ss:
+      - "vmess://"
+      - "vless://"
+      - "ss://"
+      - "ssr://"
+      - "trojan://"
+      - "hysteria://"
+      - "hysteria2://"
+      - "hy2://"
+      - "tuic://"
+      - "juicity://"
 
     # 内容过滤 - 二次过滤，消息内容必须包含这些词之一
     content_filter:

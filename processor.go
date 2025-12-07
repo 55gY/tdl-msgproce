@@ -83,13 +83,14 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 		return nil
 	})
 
-	// 获取历史消息（如果启用）
-	if p.config.Monitor.Features.FetchHistoryEnabled && len(p.config.Monitor.Channels) > 0 {
-		p.ext.Log().Info("开始获取历史消息...")
-		fmt.Println("📜 开始获取历史消息...")
+	// 获取历史消息（如果启用，>0 则开启）
+	fetchCount := p.config.Monitor.Features.FetchHistoryCount
+	if fetchCount > 0 && len(p.config.Monitor.Channels) > 0 {
+		p.ext.Log().Info(fmt.Sprintf("开始获取历史消息（每个频道 %d 条）...", fetchCount))
+		fmt.Printf("📜 开始获取历史消息（每个频道 %d 条）...\n", fetchCount)
 
 		for _, channelID := range p.config.Monitor.Channels {
-			if err := p.fetchChannelHistory(ctx, channelID); err != nil {
+			if err := p.fetchChannelHistory(ctx, channelID, fetchCount); err != nil {
 				p.ext.Log().Warn(fmt.Sprintf("获取频道 %d 历史消息失败: %v", channelID, err))
 				fmt.Printf("⚠️ 获取频道 %d 历史消息失败: %v\n", channelID, err)
 			}

@@ -32,15 +32,16 @@ type MonitorConfig struct {
 	} `yaml:"subscription_api"`
 
 	Features struct {
-		FetchHistoryEnabled bool `yaml:"fetch_history_enabled"`
+		FetchHistoryCount int `yaml:"fetch_history_count"` // 获取历史消息数量（>0开启，<=0关闭）
 	} `yaml:"features"`
 
 	Channels          []int64 `yaml:"channels"`
 	WhitelistChannels []int64 `yaml:"whitelist_channels"`
 
 	Filters struct {
-		Keywords      []string `yaml:"keywords"`
-		ContentFilter []string `yaml:"content_filter"`
+		Subs          []string `yaml:"subs"`           // 订阅格式过滤（需要二次过滤）
+		SS            []string `yaml:"ss"`             // 节点格式过滤（不需要二次过滤）
+		ContentFilter []string `yaml:"content_filter"` // 二次内容过滤（仅对订阅生效）
 		LinkBlacklist []string `yaml:"link_blacklist"`
 	} `yaml:"filters"`
 }
