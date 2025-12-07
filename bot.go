@@ -332,41 +332,67 @@ func (p *MessageProcessor) updateBotMessage(bot *tgbotapi.BotAPI, chatID int64, 
 	bot.Send(edit)
 }
 
-// handleSubscriptionLink 处理订阅链接
-func (p *MessageProcessor) handleSubscriptionLink(ctx context.Context, bot *tgbotapi.BotAPI, msg *tgbotapi.Message, subURL string) {
-	p.ext.Log().Info(fmt.Sprintf("检测到订阅链接: %s", subURL))
+// handleSubscriptionLink 处理订阅链接或代理节点
+func (p *MessageProcessor) handleSubscriptionLink(ctx context.Context, bot *tgbotapi.BotAPI, msg *tgbotapi.Message, link string) {
+	isNode := isProxyNode(link)
+	linkType := "订阅链接"
+	if isNode {
+		linkType = "代理节点"
+	}
+
+	p.ext.Log().Info(fmt.Sprintf("检测到%s: %s", linkType, link))
 
 	// 发送处理中消息
-	statusMsg := p.sendBotMessage(bot, msg.Chat.ID, "⏳ 正在添加订阅...")
+	statusMsg := p.sendBotMessage(bot, msg.Chat.ID, fmt.Sprintf("⏳ 正在添加%s...", linkType))
 	if statusMsg == nil {
 		return
 	}
 
-	// 添加订阅到 API
-	success, responseMsg := p.addSubscriptionToAPI(subURL)
+	// 添加订阅或节点到 API
+	success, responseMsg := p.addSubscriptionToAPI(link, isNode)
 
 	if success {
-		p.ext.Log().Info(fmt.Sprintf("订阅添加成功: %s", subURL))
+		p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s", linkType, link))
 	} else {
-		p.ext.Log().Warn(fmt.Sprintf("订阅添加失败: %s", subURL))
+		p.ext.Log().Warn(fmt.Sprintf("%s添加失败: %s", linkType, link))
 	}
 
 	// 更新状态消息
 	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, responseMsg)
 }
 
-// extractSubscriptionLink 提取订阅链接（非 t.me 的 http/https）
+// extractSubscriptionLink 提取订阅链接（非 t.me 的 http/https）或代理节点链接
 func extractSubscriptionLink(text string) string {
 	// 查找 http/https 链接但不是 t.me
 	parts := strings.Fields(text)
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
+		// 检查是否为代理节点链接
+		if isProxyNode(part) {
+			return part
+		}
+		// 检查是否为订阅链接（http/https 但不是 t.me）
 		if (strings.HasPrefix(part, "http://") || strings.HasPrefix(part, "https://")) &&
 			!strings.Contains(part, "t.me") {
 			return part
 		}
 	}
 	return ""
+}
+
+// isProxyNode 判断是否为代理节点链接
+func isProxyNode(link string) bool {
+	prefixes := []string{
+		"vmess://", "vless://", "ss://", "ssr://",
+		"trojan://", "hysteria://", "hysteria2://", "hy2://",
+	}
+	linkLower := strings.ToLower(link)
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(linkLower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractTelegramLinks 提取 Telegram 链接
@@ -395,9 +421,10 @@ func extractTelegramLinks(text string) []string {
 	return links
 }
 
-// SubscriptionRequest 订阅请求结构
+// SubscriptionRequest 订阅或节点请求结构
 type SubscriptionRequest struct {
-	SubURL string `json:"sub_url"`
+	SubURL string `json:"sub_url,omitempty"`
+	SS     string `json:"ss,omitempty"`
 }
 
 // SubscriptionResponse 订阅响应结构
@@ -407,15 +434,26 @@ type SubscriptionResponse struct {
 	SubURL  string `json:"sub_url"`
 }
 
-// addSubscriptionToAPI 添加订阅到 API
-func (p *MessageProcessor) addSubscriptionToAPI(subURL string) (bool, string) {
+// addSubscriptionToAPI 添加订阅或节点到 API
+func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool, string) {
 	if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
 		return false, "❌ 订阅 API 未配置"
 	}
 
 	apiURL := p.config.Monitor.SubscriptionAPI.AddURL
 
-	reqBody := SubscriptionRequest{SubURL: subURL}
+	var reqBody SubscriptionRequest
+	if isNode {
+		reqBody.SS = link
+	} else {
+		reqBody.SubURL = link
+	}
+
+	linkType := "订阅"
+	if isNode {
+		linkType = "节点"
+	}
+
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		p.ext.Log().Error("JSON 序列化失败", zap.Error(err))
@@ -431,12 +469,12 @@ func (p *MessageProcessor) addSubscriptionToAPI(subURL string) (bool, string) {
 	req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	p.ext.Log().Info(fmt.Sprintf("发送订阅请求到 %s", apiURL))
+	p.ext.Log().Info(fmt.Sprintf("发送%s请求到 %s", linkType, apiURL))
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		p.ext.Log().Error("订阅 API 请求失败", zap.Error(err))
+		p.ext.Log().Error(fmt.Sprintf("%s API 请求失败", linkType), zap.Error(err))
 		return false, "❌ 无法连接到服务器"
 	}
 	defer resp.Body.Close()
@@ -459,27 +497,31 @@ func (p *MessageProcessor) addSubscriptionToAPI(subURL string) (bool, string) {
 
 		// 如果是 200 状态码但解析失败，可能是纯文本响应
 		if resp.StatusCode == 200 {
-			return true, "✅ 订阅添加成功"
+			return true, fmt.Sprintf("✅ %s添加成功", linkType)
 		}
-		return false, fmt.Sprintf("❌ 订阅添加失败 (状态码: %d)", resp.StatusCode)
+		return false, fmt.Sprintf("❌ %s添加失败 (状态码: %d)", linkType, resp.StatusCode)
 	}
 
 	if resp.StatusCode == 200 {
 		successMsg := response.Message
 		if successMsg == "" {
-			successMsg = "订阅添加成功"
+			successMsg = fmt.Sprintf("%s添加成功", linkType)
 		}
-		p.ext.Log().Info(fmt.Sprintf("订阅添加成功: %s - %s", subURL, successMsg))
+		p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s - %s", linkType, link, successMsg))
 		return true, fmt.Sprintf("✅ %s", successMsg)
 	}
 
-	// 处理重复订阅（409 Conflict）
+	// 处理重复订阅或节点（409 Conflict）
 	if resp.StatusCode == 409 || resp.StatusCode == http.StatusConflict {
 		errorMsg := response.Error
 		if errorMsg == "" {
-			errorMsg = "该订阅链接已存在"
+			if isNode {
+				errorMsg = "节点已存在"
+			} else {
+				errorMsg = "该订阅链接已存在"
+			}
 		}
-		p.ext.Log().Debug("订阅已存在", zap.String("url", subURL))
+		p.ext.Log().Debug(fmt.Sprintf("%s已存在", linkType), zap.String("link", link))
 		return false, fmt.Sprintf("⚠️ %s", errorMsg)
 	}
 
@@ -489,10 +531,10 @@ func (p *MessageProcessor) addSubscriptionToAPI(subURL string) (bool, string) {
 		errorMsg = response.Message
 	}
 	if errorMsg == "" {
-		errorMsg = fmt.Sprintf("订阅添加失败 (状态码: %d)", resp.StatusCode)
+		errorMsg = fmt.Sprintf("%s添加失败 (状态码: %d)", linkType, resp.StatusCode)
 	}
 
-	p.ext.Log().Warn(fmt.Sprintf("订阅添加失败: %s", errorMsg))
+	p.ext.Log().Warn(fmt.Sprintf("%s添加失败: %s", linkType, errorMsg))
 	return false, fmt.Sprintf("❌ %s", errorMsg)
 }
 

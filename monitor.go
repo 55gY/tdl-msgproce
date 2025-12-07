@@ -73,8 +73,130 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	return nil
 }
 
+// addSubscription 添加订阅或单个节点
+func (p *MessageProcessor) addSubscription(link string) error {
+	if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
+		return fmt.Errorf("订阅 API 未配置")
+	}
+
+	// 使用配置文件中的完整 URL
+	apiURL := p.config.Monitor.SubscriptionAPI.AddURL
+
+	// 判断是订阅链接还是单个节点
+	isNodeLink := isProxyNode(link)
+
+	// 构建请求体
+	type SubscriptionRequest struct {
+		SubURL string `json:"sub_url,omitempty"`
+		SS     string `json:"ss,omitempty"`
+	}
+
+	var reqBody SubscriptionRequest
+	if isNodeLink {
+		reqBody.SS = link
+	} else {
+		reqBody.SubURL = link
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("JSON 序列化失败: %w", err)
+	}
+
+	// 创建请求
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	// 发送请求
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("API 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	// 记录原始响应（用于调试）
+	linkType := "订阅"
+	if isNodeLink {
+		linkType = "节点"
+	}
+	p.ext.Log().Debug("API 响应",
+		zap.String("type", linkType),
+		zap.Int("status", resp.StatusCode),
+		zap.String("body", string(body)))
+
+	// 解析响应
+	type SubscriptionResponse struct {
+		Message string `json:"message"`
+		Error   string `json:"error"`
+		SubURL  string `json:"sub_url"`
+	}
+
+	var response SubscriptionResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		p.ext.Log().Error("解析响应失败",
+			zap.Error(err),
+			zap.String("body", string(body)),
+			zap.Int("status", resp.StatusCode))
+
+		// 如果是 200 状态码但解析失败，可能是纯文本响应，视为成功
+		if resp.StatusCode == 200 {
+			p.ext.Log().Info(linkType+"添加成功（纯文本响应）", zap.String("link", link))
+			return nil
+		}
+		return fmt.Errorf("解析响应失败 (状态码: %d): %w", resp.StatusCode, err)
+	}
+
+	// 处理响应
+	if resp.StatusCode == 200 {
+		successMsg := response.Message
+		if successMsg == "" {
+			successMsg = linkType + "添加成功"
+		}
+		p.ext.Log().Info(linkType+"添加成功", zap.String("link", link), zap.String("message", successMsg))
+		return nil
+	}
+
+	// 处理重复（409 Conflict）- 不作为错误
+	if resp.StatusCode == 409 || resp.StatusCode == http.StatusConflict {
+		errorMsg := response.Error
+		if errorMsg == "" {
+			if isNodeLink {
+				errorMsg = "节点已存在"
+			} else {
+				errorMsg = "该订阅链接已存在"
+			}
+		}
+		p.ext.Log().Debug(linkType+"已存在", zap.String("link", link))
+		return nil // 不返回错误，避免重复日志
+	}
+
+	// 其他错误处理
+	errorMsg := response.Error
+	if errorMsg == "" {
+		errorMsg = response.Message
+	}
+	if errorMsg == "" {
+		errorMsg = fmt.Sprintf(linkType+"添加失败 (状态码: %d)", resp.StatusCode)
+	}
+
+	return fmt.Errorf("%s", errorMsg)
+}
+
 // fetchChannelHistory 获取频道历史消息
 func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID int64) error {
+	fmt.Printf("📥 正在获取频道 %d 的历史消息...\n", channelID)
 	fmt.Printf("📥 正在获取频道 %d 的历史消息...\n", channelID)
 
 	// 构造 InputPeerChannel
@@ -198,106 +320,6 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 
 	fmt.Printf("✅ 频道 %d: 处理了 %d 条消息\n", channelID, matchCount)
 	return nil
-}
-
-// addSubscription 添加订阅
-func (p *MessageProcessor) addSubscription(link string) error {
-	if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
-		return fmt.Errorf("订阅 API 未配置")
-	}
-
-	// 使用配置文件中的完整 URL
-	apiURL := p.config.Monitor.SubscriptionAPI.AddURL
-
-	// 构建请求体
-	type SubscriptionRequest struct {
-		SubURL string `json:"sub_url"`
-	}
-
-	reqBody := SubscriptionRequest{SubURL: link}
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("JSON 序列化失败: %w", err)
-	}
-
-	// 创建请求
-	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	// 发送请求
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("API 请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// 读取响应
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("读取响应失败: %w", err)
-	}
-
-	// 记录原始响应（用于调试）
-	p.ext.Log().Debug("API 响应", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
-
-	// 解析响应
-	type SubscriptionResponse struct {
-		Message string `json:"message"`
-		Error   string `json:"error"`
-		SubURL  string `json:"sub_url"`
-	}
-
-	var response SubscriptionResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		p.ext.Log().Error("解析响应失败",
-			zap.Error(err),
-			zap.String("body", string(body)),
-			zap.Int("status", resp.StatusCode))
-
-		// 如果是 200 状态码但解析失败，可能是纯文本响应，视为成功
-		if resp.StatusCode == 200 {
-			p.ext.Log().Info("订阅添加成功（纯文本响应）", zap.String("link", link))
-			return nil
-		}
-		return fmt.Errorf("解析响应失败 (状态码: %d): %w", resp.StatusCode, err)
-	}
-
-	// 处理响应
-	if resp.StatusCode == 200 {
-		successMsg := response.Message
-		if successMsg == "" {
-			successMsg = "订阅添加成功"
-		}
-		p.ext.Log().Info("订阅添加成功", zap.String("link", link), zap.String("message", successMsg))
-		return nil
-	}
-
-	// 处理重复订阅（409 Conflict）- 不作为错误
-	if resp.StatusCode == 409 || resp.StatusCode == http.StatusConflict {
-		errorMsg := response.Error
-		if errorMsg == "" {
-			errorMsg = "该订阅链接已存在"
-		}
-		p.ext.Log().Debug("订阅已存在", zap.String("link", link))
-		return nil // 不返回错误，避免重复日志
-	}
-
-	// 其他错误处理
-	errorMsg := response.Error
-	if errorMsg == "" {
-		errorMsg = response.Message
-	}
-	if errorMsg == "" {
-		errorMsg = fmt.Sprintf("订阅添加失败 (状态码: %d)", resp.StatusCode)
-	}
-
-	return fmt.Errorf("%s", errorMsg)
 }
 
 // 辅助函数
