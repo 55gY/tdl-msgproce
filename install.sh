@@ -680,6 +680,11 @@ install_service() {
         return 1
     fi
     
+    # >>>>>>>>> 新增步骤：安装前先停止所有旧进程 <<<<<<<<<<<
+    echo -e "${YELLOW}安装服务前，确保所有旧进程已停止...${NC}"
+    stop_service
+    echo ""
+    
     echo -e "${YELLOW}创建 systemd 服务...${NC}"
     
     # 创建服务文件
@@ -693,10 +698,14 @@ Type=simple
 User=root
 WorkingDirectory=/root/.tdl
 ExecStart=$TDL_PATH -n "default" msgproce
+# 停止服务时，确保相关进程被终止
+ExecStop=/usr/bin/pkill -f "tdl.*msgproce"
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+# 确保 systemd 清理所有子进程
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target
@@ -739,53 +748,74 @@ EOF
 stop_service() {
     echo -e "${YELLOW}停止 tdl-msgproce...${NC}"
     
-    local stopped=false
-    
-    # 停止 systemd 服务
+    local stopped_systemd=false
+    local stopped_process=false
+
+    # 步骤 1: 停止 systemd 服务
     if systemctl is-active --quiet tdl-msgproce 2>/dev/null; then
+        echo "正在停止 systemd 服务..."
         systemctl stop tdl-msgproce
-        echo -e "${GREEN}✅ systemd 服务已停止${NC}"
-        stopped=true
+        sleep 1
+        if ! systemctl is-active --quiet tdl-msgproce 2>/dev/null; then
+            echo -e "${GREEN}✅ systemd 服务已停止${NC}"
+            stopped_systemd=true
+        else
+            echo -e "${RED}⚠️ systemd 服务停止失败${NC}"
+        fi
     fi
-    
-    # 停止手动运行的进程
+
+    # 步骤 2: 查找并终止所有相关进程（作为双重保障）
     if pgrep -f "tdl.*msgproce" > /dev/null; then
+        echo "正在终止相关进程..."
+        # 使用 pkill 友好地终止
         pkill -f "tdl.*msgproce"
         sleep 1
-        
+
+        # 检查是否仍在运行，如果还在则强制终止
         if pgrep -f "tdl.*msgproce" > /dev/null; then
-            echo -e "${RED}常规停止失败，强制终止...${NC}"
+            echo -e "${YELLOW}常规停止失败，尝试强制终止...${NC}"
             pkill -9 -f "tdl.*msgproce"
             sleep 1
         fi
-        
+
         if ! pgrep -f "tdl.*msgproce" > /dev/null; then
-            echo -e "${GREEN}✅ 进程已停止${NC}"
-            stopped=true
+            echo -e "${GREEN}✅ 所有相关进程已终止${NC}"
+            stopped_process=true
+        else
+            echo -e "${RED}❌ 进程终止失败${NC}"
         fi
+    else
+        stopped_process=true # 如果本来就没有进程，也视为成功
     fi
-    
-    if [ "$stopped" = false ]; then
-        echo -e "${YELLOW}未发现运行中的服务${NC}"
+
+    if [ "$stopped_systemd" = true ] || [ "$stopped_process" = true ]; then
+        if [ "$stopped_systemd" = false ] && [ "$stopped_process" = false ]; then
+             echo -e "${YELLOW}未发现运行中的服务或进程${NC}"
+        fi
     fi
 }
 
 # 重启服务
 restart_service() {
     echo -e "${YELLOW}重启 tdl-msgproce...${NC}"
+    
+    # 调用增强的停止函数
     stop_service
     sleep 1
     
+    echo "正在启动服务..."
     if systemctl is-enabled --quiet tdl-msgproce 2>/dev/null; then
         systemctl start tdl-msgproce
         sleep 2
         if systemctl is-active --quiet tdl-msgproce; then
             echo -e "${GREEN}✅ systemd 服务已重启${NC}"
+            systemctl status tdl-msgproce --no-pager -l
         else
-            echo -e "${RED}重启失败${NC}"
+            echo -e "${RED}❌ 重启失败，服务未能启动${NC}"
+            systemctl status tdl-msgproce --no-pager -l
         fi
     else
-        echo -e "${YELLOW}请使用控制台启动或安装 systemd 服务${NC}"
+        echo -e "${YELLOW}⚠️ systemd 服务未安装，请使用“控制台启动”或“安装 systemd 服务”${NC}"
     fi
 }
 

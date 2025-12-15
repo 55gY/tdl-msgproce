@@ -69,7 +69,15 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 	// 创建 dispatcher
 	dispatcher := tg.NewUpdateDispatcher()
 
-	// 处理新消息
+	// 处理新消息（包括群组和频道）
+	dispatcher.OnNewMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewMessage) error {
+		if msg, ok := update.Message.(*tg.Message); ok {
+			return p.handleMessage(ctx, msg, e)
+		}
+		return nil
+	})
+
+	// 处理新频道消息（作为补充）
 	dispatcher.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
 			return p.handleMessage(ctx, msg, e)

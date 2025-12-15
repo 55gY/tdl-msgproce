@@ -17,6 +17,10 @@ import (
 
 // handleMessage 处理单个消息
 func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) error {
+	// >>>>>>>>> 新增日志：打印并记录完整的原始消息 <<<<<<<<<<<
+	fmt.Printf(">>>>> 收到实时消息: ID=%d, PeerID=%d <<<<<\n", msg.ID, getPeerID(msg.PeerID))
+	p.ext.Log().Info("收到实时消息 [RAW]", zap.Any("message_object", msg))
+
 	// 检查是否是监听的频道
 	peerID := getPeerID(msg.PeerID)
 	if !contains(p.config.Monitor.Channels, peerID) {
@@ -317,6 +321,10 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 			continue
 		}
 
+		// >>>>>>>>> 新增日志：打印并记录完整的历史消息 <<<<<<<<<<<
+		fmt.Printf(">>>>> 收到历史消息: ID=%d, PeerID=%d <<<<<\n", msg.ID, getPeerID(msg.PeerID))
+		p.ext.Log().Info("收到历史消息 [RAW]", zap.Any("message_object", msg))
+
 		// 构建 entities（简化版）
 		entities := tg.Entities{
 			Users: make(map[int64]*tg.User),
@@ -324,7 +332,7 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 		}
 
 		// 使用现有的 handleMessage 处理
-		err := p.handleMessage(ctx, msg, entities)
+		err = p.handleMessage(ctx, msg, entities)
 		if err == nil {
 			matchCount++
 		}
