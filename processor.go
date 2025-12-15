@@ -21,6 +21,7 @@ type MessageProcessor struct {
 	messageCount  int64
 	forwardCount  int64
 	lastHeartbeat time.Time
+	messageCache  map[int]struct{} // 新增：消息ID缓存，用于去重
 }
 
 // getSelfUser 获取当前用户信息
@@ -85,6 +86,15 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 		return nil
 	})
 
+	// >>>>>>>>> 新增：处理自己发送的消息 <<<<<<<<<<<
+	dispatcher.OnNewOutgoingMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewMessage) error {
+		if msg, ok := update.Message.(*tg.Message); ok {
+			p.ext.Log().Info("捕获到自己发送的消息", zap.String("message", msg.Message))
+			return p.handleMessage(ctx, msg, e)
+		}
+		return nil
+	})
+
 	// 处理编辑的消息
 	dispatcher.OnEditChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateEditChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
@@ -112,6 +122,10 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 
 	// 创建更新处理器
 	updateHandler := telegram.UpdateHandlerFunc(func(ctx context.Context, u tg.UpdatesClass) error {
+		// >>>>>>>>> 新增日志：打印最原始的更新对象 <<<<<<<<<<<
+		p.ext.Log().Debug("收到原始 TG 更新事件", zap.Any("update_object", u))
+		fmt.Printf("📡 收到原始 TG 更新事件: %T\n", u)
+
 		return dispatcher.Handle(ctx, u)
 	})
 

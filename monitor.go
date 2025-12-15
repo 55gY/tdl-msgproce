@@ -17,13 +17,27 @@ import (
 
 // handleMessage 处理单个消息
 func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) error {
-	// >>>>>>>>> 新增日志：打印并记录完整的原始消息 <<<<<<<<<<<
-	fmt.Printf(">>>>> 收到实时消息: ID=%d, PeerID=%d <<<<<\n", msg.ID, getPeerID(msg.PeerID))
-	p.ext.Log().Info("收到实时消息 [RAW]", zap.Any("message_object", msg))
+	// >>>>>>>>> 新增：消息去重逻辑 <<<<<<<<<<<
+	if _, exists := p.messageCache[msg.ID]; exists {
+		p.ext.Log().Debug("消息重复，已跳过", zap.Int("message_id", msg.ID))
+		return nil
+	}
+	p.messageCache[msg.ID] = struct{}{} // 存入缓存
+
+	// 打印调试日志
+	p.ext.Log().Info("处理新消息", zap.Int("id", msg.ID), zap.String("content", msg.Message))
+	fmt.Printf("📨 正在处理消息: ID=%d, 内容=\"%.50s...\"\n", msg.ID, msg.Message)
 
 	// 检查是否是监听的频道
 	peerID := getPeerID(msg.PeerID)
-	if !contains(p.config.Monitor.Channels, peerID) {
+	// 针对传出消息的特殊逻辑：如果频道列表为空，则监听所有传出消息（方便测试）
+	isOutgoing := msg.Out
+	if !isOutgoing && !contains(p.config.Monitor.Channels, peerID) {
+		return nil
+	}
+	if isOutgoing && len(p.config.Monitor.Channels) > 0 && !contains(p.config.Monitor.Channels, peerID) {
+		return nil
+	}
 		return nil
 	}
 
@@ -322,7 +336,13 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 		}
 
 		// >>>>>>>>> 新增日志：打印并记录完整的历史消息 <<<<<<<<<<<
-		fmt.Printf(">>>>> 收到历史消息: ID=%d, PeerID=%d <<<<<\n", msg.ID, getPeerID(msg.PeerID))
+		// 实现去重逻辑
+		if _, exists := p.messageCache[msg.ID]; exists {
+			continue // 如果已处理，则跳过
+		}
+		p.messageCache[msg.ID] = struct{}{}
+
+		fmt.Printf("📜 正在处理历史消息: ID=%d, PeerID=%d <<<<<\n", msg.ID, getPeerID(msg.PeerID))
 		p.ext.Log().Info("收到历史消息 [RAW]", zap.Any("message_object", msg))
 
 		// 构建 entities（简化版）

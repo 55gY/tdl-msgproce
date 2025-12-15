@@ -70,11 +70,14 @@ func run(ctx context.Context, ext *extension.Extension) error {
 
 	// 创建处理器
 	processor := &MessageProcessor{
-		ext:        ext,
-		config:     config,
-		api:        api,
-		selfUserID: self.ID,
+		ext:          ext,
+		config:       config,
+		api:          ext.Client().API(),
+		messageCache: make(map[int]struct{}), // 初始化缓存
 	}
+
+	// 启动心跳
+	go processor.StartHeartbeat(ctx)
 
 	// 启动多个协程处理不同任务
 	errChan := make(chan error, 2)
@@ -112,7 +115,7 @@ func run(ctx context.Context, ext *extension.Extension) error {
 	fmt.Println("========================================")
 
 	// 启动心跳
-	go processor.StartHeartbeat(ctx)
+	// go processor.StartHeartbeat(ctx)
 
 	// 如果没有活动服务，只等待上下文取消
 	if activeServices == 0 {
