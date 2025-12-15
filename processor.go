@@ -50,7 +50,7 @@ func (p *MessageProcessor) StartHeartbeat(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			uptime := time.Since(p.lastHeartbeat).Round(time.Second)
+			// uptime := time.Since(p.lastHeartbeat).Round(time.Second)
 			// msg := fmt.Sprintf("💓 运行: %v | 消息: %d | 转发: %d",
 			// 	uptime, p.messageCount, p.forwardCount)
 			// 为避免日志文件膨胀，默认不再将心跳写入日志或 stdout。
