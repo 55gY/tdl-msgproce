@@ -8,6 +8,7 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/updates"
 	"github.com/gotd/td/tg"
+	"go.uber.org/zap"
 
 	"github.com/iyear/tdl/extension"
 )
@@ -81,15 +82,6 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 	// 处理新频道消息（作为补充）
 	dispatcher.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
-			return p.handleMessage(ctx, msg, e)
-		}
-		return nil
-	})
-
-	// >>>>>>>>> 新增：处理自己发送的消息 <<<<<<<<<<<
-	dispatcher.OnNewOutgoingMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewMessage) error {
-		if msg, ok := update.Message.(*tg.Message); ok {
-			p.ext.Log().Info("捕获到自己发送的消息", zap.String("message", msg.Message))
 			return p.handleMessage(ctx, msg, e)
 		}
 		return nil
