@@ -38,8 +38,6 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	if isOutgoing && len(p.config.Monitor.Channels) > 0 && !contains(p.config.Monitor.Channels, peerID) {
 		return nil
 	}
-		return nil
-	}
 
 	p.messageCount++
 
