@@ -17,7 +17,7 @@ type MessageProcessor struct {
 	ext           *extension.Extension
 	config        *Config
 	api           *tg.Client
-	client        *telegram.Client // 持有由 tdl 框架创建的、功能完整的客户端
+	client        *telegram.Client
 	selfUserID    int64
 	messageCount  int64
 	forwardCount  int64
