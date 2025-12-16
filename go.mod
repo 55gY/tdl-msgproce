@@ -5,6 +5,8 @@ go 1.23.10
 require (
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/gotd/td v0.122.0
+	github.com/iyear/tdl v0.20.0
+	github.com/iyear/tdl/core v0.20.0
 	github.com/iyear/tdl/extension v0.20.0
 	go.uber.org/zap v1.27.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -34,8 +36,6 @@ require (
 	github.com/gotd/neo v0.1.5 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/iyear/connectproxy v0.1.1 // indirect
-	github.com/iyear/tdl v0.20.0 // indirect
-	github.com/iyear/tdl/core v0.20.0 // indirect
 	github.com/jedib0t/go-pretty/v6 v6.5.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/kopoli/go-terminal-size v0.0.0-20170219200355-5c97524c8b54 // indirect

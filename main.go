@@ -3,89 +3,71 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
+	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
 
 	"github.com/iyear/tdl/extension"
 )
 
 func main() {
-	extension.New(extension.Options{})(run)
+	// 1. 创建 dispatcher，它将作为所有更新事件的路由器
+	dispatcher := tg.NewUpdateDispatcher()
+
+	// 2. 将 dispatcher 作为 UpdateHandler 传入 extension.New。
+	// tdl 的扩展框架会自动为我们创建一个配置了此 handler 的 gotd 客户端。
+	extension.New(extension.Options{
+		UpdateHandler: dispatcher,
+	})(func(ctx context.Context, ext *extension.Extension) error {
+		// 3. 将 dispatcher 传入我们自己的 run 函数
+		return run(ctx, ext, dispatcher)
+	})
 }
 
-func run(ctx context.Context, ext *extension.Extension) error {
+func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDispatcher) error {
 	// 启动信息
 	fmt.Println("========================================")
-	fmt.Println("🚀 tdl-msgproce 扩展启动中...")
+	fmt.Println("🚀 tdl-msgproce 扩展启动中 (v2, 已重构)...")
 	fmt.Printf("📂 数据目录: %s\n", ext.Config().DataDir)
 
 	// 加载配置
-	configPath := ext.Config().DataDir + "/config.yaml"
-	fmt.Printf("📄 配置文件: %s\n", configPath)
-
-	config, err := loadConfig(configPath)
+	config, err := loadConfig(filepath.Join(ext.Config().DataDir, "config.yaml"))
 	if err != nil {
 		ext.Log().Error("配置加载失败", zap.Error(err))
-		fmt.Printf("❌ 配置加载失败: %v\n", err)
-		return fmt.Errorf("配置加载失败: %w", err)
+		return err
 	}
-
-	fmt.Println("✅ 配置加载成功")
-
-	// 显示功能状态
-	activeFeatures := 0
-	if config.Monitor.Enabled {
-		fmt.Printf("📝 消息监听: 已启用 (%d 个频道)\n", len(config.Monitor.Channels))
-		activeFeatures++
-	} else {
-		fmt.Println("📝 消息监听: 已禁用")
-	}
-
-	if config.Bot.Enabled {
-		fmt.Printf("🤖 Bot 功能: 已启用\n")
-		activeFeatures++
-	} else {
-		fmt.Println("🤖 Bot 功能: 已禁用")
-	}
-
-	if activeFeatures == 0 {
-		fmt.Println("")
-		fmt.Println("⚠️  当前没有启用任何功能，扩展将处于待机状态")
-		fmt.Println("💡 请完成配置文件后重启服务")
-	}
-
 	ext.Log().Info("✅ 配置加载成功")
 
-	// 获取 API 客户端
-	api := ext.Client().API()
+	// 4. 从 ext 对象中获取由 tdl 框架为我们创建好的、功能完整的客户端
+	client := ext.Client()
+	api := client.API()
 
 	// 获取当前用户信息
 	self, err := getSelfUser(ctx, api)
 	if err != nil {
-		return fmt.Errorf("获取用户信息失败: %w", err)
+		return err
 	}
+	ext.Log().Info("👤 TDL 用户", zap.String("name", self.FirstName), zap.Int64("id", self.ID))
 
-	fmt.Printf("👤 TDL 用户: %s %s (ID: %d)\n", self.FirstName, self.LastName, self.ID)
-	ext.Log().Info(fmt.Sprintf("👤 TDL 用户: %s %s (ID: %d)", self.FirstName, self.LastName, self.ID))
-
-	// 创建处理器
+	// 创建处理器，并将功能完整的 client 传递进去
 	processor := &MessageProcessor{
 		ext:          ext,
 		config:       config,
-		api:          ext.Client().API(),
-		messageCache: make(map[int]struct{}), // 初始化缓存
+		api:          api,
+		client:       client, // 使用 tdl 为我们创建好的客户端
+		selfUserID:   self.ID,
+		messageCache: make(map[int]struct{}),
 	}
 
-	// 启动心跳
-	go processor.StartHeartbeat(ctx)
+	// 5. 调用新方法，将所有的消息处理逻辑注册到 dispatcher 中
+	processor.RegisterHandlers(dispatcher)
 
-	// 启动多个协程处理不同任务
+	// 启动后台服务
 	errChan := make(chan error, 2)
 	activeServices := 0
 
-	// 1. 启动消息监听器（监听频道，发送到订阅API）
 	if config.Monitor.Enabled {
-		fmt.Println("👂 启动频道消息监听器...")
 		ext.Log().Info("👂 启动频道消息监听器...")
 		activeServices++
 		go func() {
@@ -93,9 +75,7 @@ func run(ctx context.Context, ext *extension.Extension) error {
 		}()
 	}
 
-	// 2. 启动 Telegram Bot（监听用户对话，执行转发）
 	if config.Bot.Enabled {
-		fmt.Println("🤖 启动 Telegram Bot...")
 		ext.Log().Info("🤖 启动 Telegram Bot...")
 		activeServices++
 		go func() {
@@ -109,22 +89,17 @@ func run(ctx context.Context, ext *extension.Extension) error {
 		fmt.Println("⏳ 运行中... (按 Ctrl+C 退出)")
 	} else {
 		fmt.Println("⚠️  所有功能已禁用，处于待机状态")
-		fmt.Println("💡 请完成配置后重启服务")
 		fmt.Println("⏳ 按 Ctrl+C 退出")
 	}
 	fmt.Println("========================================")
 
-	// 启动心跳
-	// go processor.StartHeartbeat(ctx)
-
-	// 如果没有活动服务，只等待上下文取消
 	if activeServices == 0 {
 		<-ctx.Done()
 		ext.Log().Info("收到停止信号，正在关闭...")
 		return nil
 	}
 
-	// 等待任何协程出错或上下文取消
+	// 等待服务出错或程序退出
 	select {
 	case err := <-errChan:
 		return err

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/updates"
 	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
 
@@ -18,11 +17,12 @@ type MessageProcessor struct {
 	ext           *extension.Extension
 	config        *Config
 	api           *tg.Client
+	client        *telegram.Client // 持有由 tdl 框架创建的、功能完整的客户端
 	selfUserID    int64
 	messageCount  int64
 	forwardCount  int64
 	lastHeartbeat time.Time
-	messageCache  map[int]struct{} // 新增：消息ID缓存，用于去重
+	messageCache  map[int]struct{}
 }
 
 // getSelfUser 获取当前用户信息
@@ -52,34 +52,14 @@ func (p *MessageProcessor) StartHeartbeat(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// uptime := time.Since(p.lastHeartbeat).Round(time.Second)
-			// msg := fmt.Sprintf("💓 运行: %v | 消息: %d | 转发: %d",
-			// 	uptime, p.messageCount, p.forwardCount)
-			// 为避免日志文件膨胀，默认不再将心跳写入日志或 stdout。
-			// 如需输出，请在这里恢复 fmt.Println 和 p.ext.Log().Info。
-			// fmt.Println(msg)
-			// p.ext.Log().Info(msg)
 			p.lastHeartbeat = time.Now()
 		}
 	}
 }
 
-// StartMessageListener 启动消息监听器
-func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
-	p.ext.Log().Info("消息监听器已启动")
-
-	// 创建 dispatcher
-	dispatcher := tg.NewUpdateDispatcher()
-
-	// 处理新消息（包括群组和频道）
-	dispatcher.OnNewMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewMessage) error {
-		if msg, ok := update.Message.(*tg.Message); ok {
-			return p.handleMessage(ctx, msg, e)
-		}
-		return nil
-	})
-
-	// 处理新频道消息（作为补充）
+// RegisterHandlers 将所有消息处理逻辑注册到 dispatcher
+func (p *MessageProcessor) RegisterHandlers(dispatcher tg.UpdateDispatcher) {
+	// 1. 处理新的频道消息
 	dispatcher.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
 			return p.handleMessage(ctx, msg, e)
@@ -87,52 +67,42 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 		return nil
 	})
 
-	// 处理编辑的消息
+	// 2. 处理被编辑的频道消息
 	dispatcher.OnEditChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateEditChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
 			return p.handleMessage(ctx, msg, e)
 		}
 		return nil
 	})
+}
 
-	// 获取历史消息（如果启用，>0 则开启）
-	fetchCount := p.config.Monitor.Features.FetchHistoryCount
-	if fetchCount > 0 && len(p.config.Monitor.Channels) > 0 {
-		p.ext.Log().Info(fmt.Sprintf("开始获取历史消息（每个频道 %d 条）...", fetchCount))
-		fmt.Printf("📜 开始获取历史消息（每个频道 %d 条）...\n", fetchCount)
+// StartMessageListener 启动消息监听器
+func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
+	// 异步获取历史消息，避免阻塞启动
+	go func() {
+		fetchCount := p.config.Monitor.Features.FetchHistoryCount
+		if fetchCount > 0 && len(p.config.Monitor.Channels) > 0 {
+			p.ext.Log().Info(fmt.Sprintf("开始获取历史消息（每个频道 %d 条）...", fetchCount))
+			// 使用一个新的后台 context，以防主 context 因为其他原因提前结束
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
 
-		for _, channelID := range p.config.Monitor.Channels {
-			if err := p.fetchChannelHistory(ctx, channelID, fetchCount); err != nil {
-				p.ext.Log().Warn(fmt.Sprintf("获取频道 %d 历史消息失败: %v", channelID, err))
-				fmt.Printf("⚠️ 获取频道 %d 历史消息失败: %v\n", channelID, err)
+			for _, channelID := range p.config.Monitor.Channels {
+				if err := p.fetchChannelHistory(bgCtx, channelID, fetchCount); err != nil {
+					p.ext.Log().Warn("获取历史消息失败", zap.Int64("channel", channelID), zap.Error(err))
+				}
 			}
+			p.ext.Log().Info("历史消息获取完成")
 		}
+	}()
 
-		p.ext.Log().Info("历史消息获取完成")
-		fmt.Println("✅ 历史消息获取完成")
-	}
-
-	// 创建更新处理器
-	updateHandler := telegram.UpdateHandlerFunc(func(ctx context.Context, u tg.UpdatesClass) error {
-		// >>>>>>>>> 新增日志：打印最原始的更新对象 <<<<<<<<<<<
-		p.ext.Log().Debug("收到原始 TG 更新事件", zap.Any("update_object", u))
-		fmt.Printf("📡 收到原始 TG 更新事件: %T\n", u)
-
-		return dispatcher.Handle(ctx, u)
-	})
-
-	// 启动更新监听
-	gaps := updates.New(updates.Config{
-		Handler: updateHandler,
-	})
-
-	client := p.ext.Client()
-
-	return client.Run(ctx, func(ctx context.Context) error {
-		return gaps.Run(ctx, client.API(), p.selfUserID, updates.AuthOptions{
-			OnStart: func(ctx context.Context) {
-				p.ext.Log().Info("✅ 消息监听器启动成功")
-			},
-		})
+	// client.Run 是一个阻塞操作。
+	// tdl 框架已经为我们创建并配置好了这个 client，我们只需要调用 Run() 即可。
+	// 它会自动处理连接、认证和接收更新的循环。
+	// 当传入的 ctx 被取消时（例如用户按 Ctrl+C），Run 方法会自动返回。
+	return p.client.Run(ctx, func(ctx context.Context) error {
+		p.ext.Log().Info("✅ 消息监听器已连接并成功运行")
+		<-ctx.Done()
+		return ctx.Err()
 	})
 }

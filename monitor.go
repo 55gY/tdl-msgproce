@@ -24,20 +24,21 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	}
 	p.messageCache[msg.ID] = struct{}{} // 存入缓存
 
-	// 打印调试日志
-	p.ext.Log().Info("处理新消息", zap.Int("id", msg.ID), zap.String("content", msg.Message))
-	fmt.Printf("📨 正在处理消息: ID=%d, 内容=\"%.50s...\"\n", msg.ID, msg.Message)
+	peerID := getPeerID(msg.PeerID)
 
 	// 检查是否是监听的频道
-	peerID := getPeerID(msg.PeerID)
-	// 针对传出消息的特殊逻辑：如果频道列表为空，则监听所有传出消息（方便测试）
-	isOutgoing := msg.Out
-	if !isOutgoing && !contains(p.config.Monitor.Channels, peerID) {
-		return nil
+	// 仅当配置文件中的频道列表（channels）不为空时，才进行过滤
+	if len(p.config.Monitor.Channels) > 0 {
+		if !contains(p.config.Monitor.Channels, peerID) {
+			// 如果消息的来源频道/群组不在监听列表中，则直接跳过，不处理
+			return nil
+		}
 	}
-	if isOutgoing && len(p.config.Monitor.Channels) > 0 && !contains(p.config.Monitor.Channels, peerID) {
-		return nil
-	}
+	// 如果 `channels` 列表为空，则默认处理所有接收到的频道/群组消息
+
+	// 打印调试日志
+	p.ext.Log().Info("处理新消息", zap.Int("id", msg.ID), zap.Int64("channel_id", peerID), zap.String("content", msg.Message))
+	fmt.Printf("📨 正在处理消息: ID=%d, ChannelID=%d, 内容=\"%.50s...\"\n", msg.ID, peerID, msg.Message)
 
 	p.messageCount++
 
@@ -340,8 +341,8 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 		}
 		p.messageCache[msg.ID] = struct{}{}
 
-		fmt.Printf("📜 正在处理历史消息: ID=%d, PeerID=%d <<<<<\n", msg.ID, getPeerID(msg.PeerID))
-		p.ext.Log().Info("收到历史消息 [RAW]", zap.Any("message_object", msg))
+		// fmt.Printf("📜 正在处理历史消息: ID=%d, PeerID=%d <<<<<\n", msg.ID, getPeerID(msg.PeerID))
+		// p.ext.Log().Info("收到历史消息 [RAW]", zap.Any("message_object", msg))
 
 		// 构建 entities（简化版）
 		entities := tg.Entities{
