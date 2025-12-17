@@ -18,11 +18,11 @@ import (
 // handleMessage 处理单个消息
 func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) error {
 	// 消息去重逻辑
-	if _, exists := p.messageCache[msg.ID]; exists {
+	if p.messageCache.Has(msg.ID) {
 		p.ext.Log().Debug("消息重复，已跳过", zap.Int("message_id", msg.ID))
 		return nil
 	}
-	p.messageCache[msg.ID] = struct{}{} // 存入缓存
+	p.messageCache.Add(msg.ID) // 存入缓存
 
 	peerID := getPeerID(msg.PeerID)
 
@@ -336,10 +336,10 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 
 		// >>>>>>>>> 新增日志：打印并记录完整的历史消息 <<<<<<<<<<<
 		// 实现去重逻辑
-		if _, exists := p.messageCache[msg.ID]; exists {
+		if p.messageCache.Has(msg.ID) {
 			continue // 如果已处理，则跳过
 		}
-		p.messageCache[msg.ID] = struct{}{}
+		p.messageCache.Add(msg.ID)
 
 		fmt.Printf("📜 正在处理历史消息: ID=%d, PeerID=%d <<<<<\n", msg.ID, getPeerID(msg.PeerID))
 		p.ext.Log().Info("收到历史消息 [RAW]", zap.Any("message_object", msg))

@@ -22,7 +22,7 @@ type MessageProcessor struct {
 	messageCount  int64
 	forwardCount  int64
 	lastHeartbeat time.Time
-	messageCache  map[int]struct{}
+	messageCache  *MessageCache
 }
 
 // getSelfUser 获取当前用户信息
