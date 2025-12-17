@@ -34,7 +34,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 	// 加载配置
 	config, err := loadConfig(filepath.Join(ext.Config().DataDir, "config.yaml"))
 	if err != nil {
-		ext.Log().Error("配置加载失败", zap.Error(err))
+		ext.Log().Info("配置加载失败", zap.Error(err))
 		return err
 	}
 	ext.Log().Info("✅ 配置加载成功")

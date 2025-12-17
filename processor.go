@@ -89,7 +89,7 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 
 			for _, channelID := range p.config.Monitor.Channels {
 				if err := p.fetchChannelHistory(bgCtx, channelID, fetchCount); err != nil {
-					p.ext.Log().Warn("获取历史消息失败", zap.Int64("channel", channelID), zap.Error(err))
+					p.ext.Log().Info("获取历史消息失败", zap.Int64("channel", channelID), zap.Error(err))
 				}
 			}
 			p.ext.Log().Info("历史消息获取完成")

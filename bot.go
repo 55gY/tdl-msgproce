@@ -354,7 +354,7 @@ func (p *MessageProcessor) handleSubscriptionLink(ctx context.Context, bot *tgbo
 	if success {
 		p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s", linkType, link))
 	} else {
-		p.ext.Log().Warn(fmt.Sprintf("%s添加失败: %s", linkType, link))
+		p.ext.Log().Info(fmt.Sprintf("%s添加失败: %s", linkType, link))
 	}
 
 	// 更新状态消息
@@ -456,13 +456,13 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		p.ext.Log().Error("JSON 序列化失败", zap.Error(err))
+		p.ext.Log().Info("JSON 序列化失败", zap.Error(err))
 		return false, fmt.Sprintf("❌ 请求失败: %v", err)
 	}
 
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		p.ext.Log().Error("创建请求失败", zap.Error(err))
+		p.ext.Log().Info("创建请求失败", zap.Error(err))
 		return false, fmt.Sprintf("❌ 请求失败: %v", err)
 	}
 
@@ -474,23 +474,23 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		p.ext.Log().Error(fmt.Sprintf("%s API 请求失败", linkType), zap.Error(err))
+		p.ext.Log().Info(fmt.Sprintf("%s API 请求失败", linkType), zap.Error(err))
 		return false, "❌ 无法连接到服务器"
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		p.ext.Log().Error("读取响应失败", zap.Error(err))
+		p.ext.Log().Info("读取响应失败", zap.Error(err))
 		return false, "❌ 读取响应失败"
 	}
 
 	// 记录原始响应（用于调试）
-	p.ext.Log().Debug("API 响应", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
+	p.ext.Log().Info("API 响应", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
 
 	var response SubscriptionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		p.ext.Log().Error("解析响应失败",
+		p.ext.Log().Info("解析响应失败",
 			zap.Error(err),
 			zap.String("body", string(body)),
 			zap.Int("status", resp.StatusCode))
@@ -521,7 +521,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 				errorMsg = "该订阅链接已存在"
 			}
 		}
-		p.ext.Log().Debug(fmt.Sprintf("%s已存在", linkType), zap.String("link", link))
+		p.ext.Log().Info(fmt.Sprintf("%s已存在", linkType), zap.String("link", link))
 		return false, fmt.Sprintf("⚠️ %s", errorMsg)
 	}
 
@@ -534,7 +534,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 		errorMsg = fmt.Sprintf("%s添加失败 (状态码: %d)", linkType, resp.StatusCode)
 	}
 
-	p.ext.Log().Warn(fmt.Sprintf("%s添加失败: %s", linkType, errorMsg))
+	p.ext.Log().Info(fmt.Sprintf("%s添加失败: %s", linkType, errorMsg))
 	return false, fmt.Sprintf("❌ %s", errorMsg)
 }
 
@@ -675,7 +675,7 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		} else if err != nil {
 			task.Status = "failed"
 			task.Error = err.Error()
-			p.ext.Log().Error("转发失败", zap.Int("taskID", task.ID), zap.String("link", task.Link), zap.Error(err))
+			p.ext.Log().Info("转发失败", zap.Int("taskID", task.ID), zap.String("link", task.Link), zap.Error(err))
 		} else {
 			task.Status = "completed"
 			p.forwardCount++

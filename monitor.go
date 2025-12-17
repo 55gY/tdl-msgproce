@@ -15,12 +15,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// handleMessage 处理单个消息
-func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) error {
+// handleMessage 处理单个消息，返回 (有效订阅数, 有效节点数, error)
+func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) (int, int, error) {
 	// 消息去重逻辑
 	if p.messageCache.Has(msg.ID) {
-		p.ext.Log().Debug("消息重复，已跳过", zap.Int("message_id", msg.ID))
-		return nil
+		p.ext.Log().Info("消息重复，已跳过", zap.Int("message_id", msg.ID))
+		return 0, 0, nil
 	}
 	p.messageCache.Add(msg.ID) // 存入缓存
 
@@ -31,7 +31,7 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	if len(p.config.Monitor.Channels) > 0 {
 		if !contains(p.config.Monitor.Channels, peerID) {
 			// 如果消息的来源频道/群组不在监听列表中，则直接跳过，不处理
-			return nil
+			return 0, 0, nil
 		}
 	}
 	// 如果 `channels` 列表为空，则默认处理所有接收到的频道/群组消息
@@ -45,7 +45,7 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	// 获取消息文本
 	text := msg.Message
 	if text == "" {
-		return nil
+		return 0, 0, nil
 	}
 
 	// 检查是否包含订阅格式或节点格式
@@ -53,7 +53,7 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	hasNodeFormat := matchAny(text, p.config.Monitor.Filters.SS)
 
 	if !hasSubsFormat && !hasNodeFormat {
-		return nil // 既不是订阅也不是节点，跳过
+		return 0, 0, nil // 既不是订阅也不是节点，跳过
 	}
 
 	// 白名单频道跳过二次过滤
@@ -64,7 +64,7 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 		// 纯订阅格式，需要二次过滤
 		if !isWhitelisted && len(p.config.Monitor.Filters.ContentFilter) > 0 {
 			if !matchAny(text, p.config.Monitor.Filters.ContentFilter) {
-				return nil
+				return 0, 0, nil
 			}
 		}
 	}
@@ -73,25 +73,30 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	// 提取链接
 	links := extractLinks(text)
 	if len(links) == 0 {
-		return nil
+		return 0, 0, nil
 	}
 
 	// 过滤黑名单链接
 	filteredLinks := filterLinks(links, p.config.Monitor.Filters.LinkBlacklist)
 	if len(filteredLinks) == 0 {
-		return nil
+		return 0, 0, nil
 	}
 
 	// 发送到订阅 API
+	subsCount := 0
+	nodeCount := 0
 	for _, link := range filteredLinks {
 		if err := p.addSubscription(link); err != nil {
-			p.ext.Log().Error("发送订阅失败",
+			p.ext.Log().Info("发送订阅失败",
 				zap.String("link", link),
 				zap.Error(err))
 		} else {
 			linkType := "订阅"
 			if isProxyNode(link) {
 				linkType = "节点"
+				nodeCount++
+			} else {
+				subsCount++
 			}
 			p.ext.Log().Info(fmt.Sprintf("新%s", linkType),
 				zap.Int64("channel", peerID),
@@ -100,7 +105,7 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 		}
 	}
 
-	return nil
+	return subsCount, nodeCount, nil
 }
 
 // addSubscription 添加订阅或单个节点
@@ -161,7 +166,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 	if isNodeLink {
 		linkType = "节点"
 	}
-	p.ext.Log().Debug("API 响应",
+	p.ext.Log().Info("API 响应",
 		zap.String("type", linkType),
 		zap.Int("status", resp.StatusCode),
 		zap.String("body", string(body)))
@@ -175,7 +180,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 
 	var response SubscriptionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		p.ext.Log().Error("解析响应失败",
+		p.ext.Log().Info("解析响应失败",
 			zap.Error(err),
 			zap.String("body", string(body)),
 			zap.Int("status", resp.StatusCode))
@@ -208,7 +213,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 				errorMsg = "该订阅链接已存在"
 			}
 		}
-		p.ext.Log().Debug(linkType+"已存在", zap.String("link", link))
+		p.ext.Log().Info(linkType+"已存在", zap.String("link", link))
 		return nil // 不返回错误，避免重复日志
 	}
 
@@ -326,23 +331,20 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 
 	fmt.Printf("📊 获取到 %d 条历史消息\n", len(messages))
 
-	// 处理每条消息
-	matchCount := 0
+	// 处理每条消息，统计有效订阅和节点
+	totalSubs := 0
+	totalNodes := 0
 	for i := len(messages) - 1; i >= 0; i-- { // 倒序处理，从旧到新
 		msg, ok := messages[i].(*tg.Message)
 		if !ok {
 			continue
 		}
 
-		// >>>>>>>>> 新增日志：打印并记录完整的历史消息 <<<<<<<<<<<
 		// 实现去重逻辑
 		if p.messageCache.Has(msg.ID) {
 			continue // 如果已处理，则跳过
 		}
 		p.messageCache.Add(msg.ID)
-
-		fmt.Printf("📜 正在处理历史消息: ID=%d, PeerID=%d <<<<<\n", msg.ID, getPeerID(msg.PeerID))
-		p.ext.Log().Info("收到历史消息 [RAW]", zap.Any("message_object", msg))
 
 		// 构建 entities（简化版）
 		entities := tg.Entities{
@@ -351,13 +353,18 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 		}
 
 		// 使用现有的 handleMessage 处理
-		err = p.handleMessage(ctx, msg, entities)
-		if err == nil {
-			matchCount++
-		}
+		subsCount, nodeCount, _ := p.handleMessage(ctx, msg, entities)
+		totalSubs += subsCount
+		totalNodes += nodeCount
 	}
 
-	fmt.Printf("✅ 频道 %d: 处理了 %d 条消息\n", channelID, matchCount)
+	// 格式化输出统计信息
+	fmt.Printf("✅ 频道:%d 历史消息:%d 有效订阅:%d 有效节点:%d\n", channelID, len(messages), totalSubs, totalNodes)
+	p.ext.Log().Info("历史消息处理完成",
+		zap.Int64("频道", channelID),
+		zap.Int("历史消息", len(messages)),
+		zap.Int("有效订阅", totalSubs),
+		zap.Int("有效节点", totalNodes))
 	return nil
 }
 
