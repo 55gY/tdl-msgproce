@@ -85,7 +85,11 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	// 发送到订阅 API
 	subsCount := 0
 	nodeCount := 0
+	p.ext.Log().Debug("准备发送链接到API",
+		zap.Int("message_id", msg.ID),
+		zap.Int("filtered_links_count", len(filteredLinks)))
 	for _, link := range filteredLinks {
+		p.ext.Log().Debug("调用addSubscription", zap.String("link", link))
 		if err := p.addSubscription(link); err != nil {
 			p.ext.Log().Info("发送订阅失败",
 				zap.String("link", link),
@@ -110,7 +114,11 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 
 // addSubscription 添加订阅或单个节点
 func (p *MessageProcessor) addSubscription(link string) error {
+	p.ext.Log().Debug("进入addSubscription函数", zap.String("link", link))
 	if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
+		p.ext.Log().Warn("订阅 API 未配置或未启用",
+			zap.Bool("enabled", p.config.Monitor.Enabled),
+			zap.String("api_url", p.config.Monitor.SubscriptionAPI.AddURL))
 		return fmt.Errorf("订阅 API 未配置")
 	}
 
@@ -387,6 +395,7 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 			continue // 如果已处理，则跳过
 		}
 		p.messageCache.Add(msg.ID)
+		p.ext.Log().Debug("处理历史消息", zap.Int("message_id", msg.ID), zap.Int64("channel_id", channelID))
 
 		// 统计提取的链接数（在处理之前）
 		text := msg.Message
