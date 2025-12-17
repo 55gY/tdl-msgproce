@@ -233,6 +233,9 @@ func (p *MessageProcessor) addSubscription(link string) error {
 func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID int64, limit int) error {
 	fmt.Printf("📥 正在获取频道 %d 的历史消息（最多 %d 条）...\n", channelID, limit)
 
+	// 保存频道名称
+	var channelTitle string
+
 	// 构造 InputPeerChannel
 	inputPeer := &tg.InputPeerChannel{
 		ChannelID:  channelID,
@@ -287,7 +290,7 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 			return fmt.Errorf("未找到频道 %d，请确认已加入该频道", channelID)
 		}
 
-		fmt.Printf("📢 频道名称: %s\n", foundChannel.Title)
+		channelTitle = foundChannel.Title
 		inputPeer.AccessHash = accessHash
 	} else {
 		// 成功获取频道信息
@@ -295,7 +298,7 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 		case *tg.MessagesChats:
 			if len(chats.Chats) > 0 {
 				if ch, ok := chats.Chats[0].(*tg.Channel); ok {
-					fmt.Printf("📢 频道名称: %s\n", ch.Title)
+					channelTitle = ch.Title
 					inputPeer.AccessHash = ch.AccessHash
 				}
 			}
@@ -329,11 +332,10 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 		messages = h.Messages
 	}
 
-	fmt.Printf("📊 获取到 %d 条历史消息\n", len(messages))
-
 	// 处理每条消息，统计有效订阅和节点
 	totalSubs := 0
 	totalNodes := 0
+	totalLinks := 0 // 提取到的订阅/节点总数
 	for i := len(messages) - 1; i >= 0; i-- { // 倒序处理，从旧到新
 		msg, ok := messages[i].(*tg.Message)
 		if !ok {
@@ -345,6 +347,21 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 			continue // 如果已处理，则跳过
 		}
 		p.messageCache.Add(msg.ID)
+
+		// 统计提取的链接数（在处理之前）
+		text := msg.Message
+		if text != "" {
+			// 检查是否包含订阅格式或节点格式
+			hasSubsFormat := matchAny(text, p.config.Monitor.Filters.Subs)
+			hasNodeFormat := matchAny(text, p.config.Monitor.Filters.SS)
+			if hasSubsFormat || hasNodeFormat {
+				links := extractLinks(text)
+				if len(links) > 0 {
+					filteredLinks := filterLinks(links, p.config.Monitor.Filters.LinkBlacklist)
+					totalLinks += len(filteredLinks)
+				}
+			}
+		}
 
 		// 构建 entities（简化版）
 		entities := tg.Entities{
@@ -359,10 +376,13 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 	}
 
 	// 格式化输出统计信息
-	fmt.Printf("✅ 频道:%d 历史消息:%d 有效订阅:%d 有效节点:%d\n", channelID, len(messages), totalSubs, totalNodes)
+	fmt.Printf("✅ 频道名称: %s 频道ID:%d 历史消息:%d 订阅/节点数:%d 有效订阅:%d 有效节点:%d\n",
+		channelTitle, channelID, len(messages), totalLinks, totalSubs, totalNodes)
 	p.ext.Log().Info("历史消息处理完成",
-		zap.Int64("频道", channelID),
+		zap.String("频道名称", channelTitle),
+		zap.Int64("频道ID", channelID),
 		zap.Int("历史消息", len(messages)),
+		zap.Int("订阅/节点数", totalLinks),
 		zap.Int("有效订阅", totalSubs),
 		zap.Int("有效节点", totalNodes))
 	return nil
