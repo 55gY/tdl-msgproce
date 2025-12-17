@@ -62,7 +62,9 @@ func (p *MessageProcessor) RegisterHandlers(dispatcher tg.UpdateDispatcher) {
 	// 1. 处理新的频道消息
 	dispatcher.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
-			return p.handleMessage(ctx, msg, e)
+			if _, _, err := p.handleMessage(ctx, msg, e); err != nil {
+				p.ext.Log().Info("处理消息失败", zap.Error(err))
+			}
 		}
 		return nil
 	})
@@ -70,7 +72,9 @@ func (p *MessageProcessor) RegisterHandlers(dispatcher tg.UpdateDispatcher) {
 	// 2. 处理被编辑的频道消息
 	dispatcher.OnEditChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateEditChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
-			return p.handleMessage(ctx, msg, e)
+			if _, _, err := p.handleMessage(ctx, msg, e); err != nil {
+				p.ext.Log().Info("处理历史消息失败", zap.Error(err))
+			}
 		}
 		return nil
 	})
