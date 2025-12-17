@@ -231,7 +231,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 
 // fetchChannelHistory 获取频道历史消息
 func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID int64, limit int) error {
-	fmt.Printf("📥 正在获取频道 %d 的历史消息（最多 %d 条）...\n", channelID, limit)
+	// fmt.Printf("📥 正在获取频道 %d 的历史消息（最多 %d 条）...\n", channelID, limit)
 
 	// 保存频道名称
 	var channelTitle string
@@ -305,32 +305,72 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 		}
 	}
 
-	// 获取历史消息
-	history, err := p.api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
-		Peer:       inputPeer,
-		OffsetID:   0,
-		OffsetDate: 0,
-		AddOffset:  0,
-		Limit:      limit, // 使用配置的数量
-		MaxID:      0,
-		MinID:      0,
-		Hash:       0,
-	})
+	// 获取历史消息（分页获取以突破100条限制）
+	var allMessages []tg.MessageClass
+	offsetID := 0
+	batchSize := 100 // Telegram API 单次最多返回100条
+	fetchedCount := 0
 
-	if err != nil {
-		return fmt.Errorf("获取历史消息失败: %w", err)
+	for fetchedCount < limit {
+		// 计算本次请求的数量
+		requestLimit := batchSize
+		if limit-fetchedCount < batchSize {
+			requestLimit = limit - fetchedCount
+		}
+
+		history, err := p.api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+			Peer:       inputPeer,
+			OffsetID:   offsetID,
+			OffsetDate: 0,
+			AddOffset:  0,
+			Limit:      requestLimit,
+			MaxID:      0,
+			MinID:      0,
+			Hash:       0,
+		})
+
+		if err != nil {
+			return fmt.Errorf("获取历史消息失败: %w", err)
+		}
+
+		// 提取本批次的消息
+		var batchMessages []tg.MessageClass
+		switch h := history.(type) {
+		case *tg.MessagesMessages:
+			batchMessages = h.Messages
+		case *tg.MessagesMessagesSlice:
+			batchMessages = h.Messages
+		case *tg.MessagesChannelMessages:
+			batchMessages = h.Messages
+		}
+
+		// 如果没有更多消息，退出循环
+		if len(batchMessages) == 0 {
+			break
+		}
+
+		// 添加到总消息列表
+		allMessages = append(allMessages, batchMessages...)
+		fetchedCount += len(batchMessages)
+
+		// 更新 offsetID 为最后一条消息的 ID
+		if lastMsg, ok := batchMessages[len(batchMessages)-1].(*tg.Message); ok {
+			offsetID = lastMsg.ID
+		} else {
+			break // 如果最后一条不是普通消息，退出
+		}
+
+		// 如果返回的消息数少于请求数，说明已经没有更多消息
+		if len(batchMessages) < requestLimit {
+			break
+		}
+
+		// 短暂延迟避免请求过快
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	// 处理历史消息
-	var messages []tg.MessageClass
-	switch h := history.(type) {
-	case *tg.MessagesMessages:
-		messages = h.Messages
-	case *tg.MessagesMessagesSlice:
-		messages = h.Messages
-	case *tg.MessagesChannelMessages:
-		messages = h.Messages
-	}
+	messages := allMessages
+	// fmt.Printf("✅ 实际获取到 %d 条历史消息\n", len(messages))
 
 	// 处理每条消息，统计有效订阅和节点
 	totalSubs := 0
