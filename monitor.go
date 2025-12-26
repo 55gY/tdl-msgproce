@@ -132,6 +132,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 	type SubscriptionRequest struct {
 		SubURL string `json:"sub_url,omitempty"`
 		SS     string `json:"ss,omitempty"`
+		Test   bool   `json:"test"`
 	}
 
 	var reqBody SubscriptionRequest
@@ -140,6 +141,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 	} else {
 		reqBody.SubURL = link
 	}
+	reqBody.Test = true
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -156,7 +158,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 	req.Header.Set("Content-Type", "application/json")
 
 	// 发送请求
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("API 请求失败: %w", err)
@@ -181,9 +183,16 @@ func (p *MessageProcessor) addSubscription(link string) error {
 
 	// 解析响应
 	type SubscriptionResponse struct {
-		Message string `json:"message"`
-		Error   string `json:"error"`
-		SubURL  string `json:"sub_url"`
+		Message     string `json:"message"`
+		Error       string `json:"error"`
+		SubURL      string `json:"sub_url"`
+		TestedNodes *int   `json:"tested_nodes,omitempty"`
+		PassedNodes *int   `json:"passed_nodes,omitempty"`
+		FailedNodes *int   `json:"failed_nodes,omitempty"`
+		AddedNodes  *int   `json:"added_nodes,omitempty"`
+		Duration    string `json:"duration,omitempty"`
+		Timeout     *bool  `json:"timeout,omitempty"`
+		Warning     string `json:"warning,omitempty"`
 	}
 
 	var response SubscriptionResponse
@@ -203,11 +212,28 @@ func (p *MessageProcessor) addSubscription(link string) error {
 
 	// 处理响应
 	if resp.StatusCode == 200 {
-		successMsg := response.Message
-		if successMsg == "" {
-			successMsg = linkType + "添加成功"
+		// 检查是否为检测模式响应
+		if response.TestedNodes != nil {
+			// 检测模式响应 - 记录详细统计信息
+			p.ext.Log().Info(linkType+"检测并添加成功",
+				zap.String("link", link),
+				zap.Int("tested_nodes", *response.TestedNodes),
+				zap.Intp("passed_nodes", response.PassedNodes),
+				zap.Intp("failed_nodes", response.FailedNodes),
+				zap.Intp("added_nodes", response.AddedNodes),
+				zap.String("duration", response.Duration),
+				zap.Boolp("timeout", response.Timeout))
+			if response.Timeout != nil && *response.Timeout {
+				p.ext.Log().Warn(linkType+"检测超时", zap.String("warning", response.Warning))
+			}
+		} else {
+			// 普通模式响应
+			successMsg := response.Message
+			if successMsg == "" {
+				successMsg = linkType + "添加成功"
+			}
+			p.ext.Log().Info(linkType+"添加成功", zap.String("link", link), zap.String("message", successMsg))
 		}
-		p.ext.Log().Info(linkType+"添加成功", zap.String("link", link), zap.String("message", successMsg))
 		return nil
 	}
 

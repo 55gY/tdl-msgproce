@@ -425,13 +425,21 @@ func extractTelegramLinks(text string) []string {
 type SubscriptionRequest struct {
 	SubURL string `json:"sub_url,omitempty"`
 	SS     string `json:"ss,omitempty"`
+	Test   bool   `json:"test"`
 }
 
 // SubscriptionResponse 订阅响应结构
 type SubscriptionResponse struct {
-	Message string `json:"message"`
-	Error   string `json:"error"`
-	SubURL  string `json:"sub_url"`
+	Message     string `json:"message"`
+	Error       string `json:"error"`
+	SubURL      string `json:"sub_url"`
+	TestedNodes *int   `json:"tested_nodes,omitempty"`
+	PassedNodes *int   `json:"passed_nodes,omitempty"`
+	FailedNodes *int   `json:"failed_nodes,omitempty"`
+	AddedNodes  *int   `json:"added_nodes,omitempty"`
+	Duration    string `json:"duration,omitempty"`
+	Timeout     *bool  `json:"timeout,omitempty"`
+	Warning     string `json:"warning,omitempty"`
 }
 
 // addSubscriptionToAPI 添加订阅或节点到 API
@@ -448,6 +456,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 	} else {
 		reqBody.SubURL = link
 	}
+	reqBody.Test = true
 
 	linkType := "订阅"
 	if isNode {
@@ -471,7 +480,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 
 	p.ext.Log().Info(fmt.Sprintf("发送%s请求到 %s", linkType, apiURL))
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		p.ext.Log().Info(fmt.Sprintf("%s API 请求失败", linkType), zap.Error(err))
@@ -503,12 +512,45 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 	}
 
 	if resp.StatusCode == 200 {
-		successMsg := response.Message
-		if successMsg == "" {
-			successMsg = fmt.Sprintf("%s添加成功", linkType)
+		// 检查是否为检测模式响应
+		if response.TestedNodes != nil {
+			// 检测模式响应
+			var msg string
+			if isNode {
+				msg = "✅ 节点检测并添加成功\n"
+			} else {
+				msg = "✅ 订阅检测并添加成功\n"
+			}
+			msg += fmt.Sprintf("📊 检测: %d个节点\n", *response.TestedNodes)
+			if response.PassedNodes != nil {
+				msg += fmt.Sprintf("✅ 通过: %d个\n", *response.PassedNodes)
+			}
+			if response.FailedNodes != nil {
+				msg += fmt.Sprintf("❌ 失败: %d个\n", *response.FailedNodes)
+			}
+			if response.AddedNodes != nil {
+				msg += fmt.Sprintf("➕ 添加: %d个\n", *response.AddedNodes)
+			}
+			if response.Duration != "" {
+				msg += fmt.Sprintf("⏱ 耗时: %s", response.Duration)
+			}
+			if response.Timeout != nil && *response.Timeout && response.Warning != "" {
+				msg += "\n⚠️ " + response.Warning
+			}
+			p.ext.Log().Info(fmt.Sprintf("%s检测并添加成功", linkType),
+				zap.String("link", link),
+				zap.Int("tested", *response.TestedNodes),
+				zap.String("duration", response.Duration))
+			return true, msg
+		} else {
+			// 普通模式响应
+			successMsg := response.Message
+			if successMsg == "" {
+				successMsg = fmt.Sprintf("%s添加成功", linkType)
+			}
+			p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s - %s", linkType, link, successMsg))
+			return true, fmt.Sprintf("✅ %s", successMsg)
 		}
-		p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s - %s", linkType, link, successMsg))
-		return true, fmt.Sprintf("✅ %s", successMsg)
 	}
 
 	// 处理重复订阅或节点（409 Conflict）
