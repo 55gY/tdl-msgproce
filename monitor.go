@@ -56,7 +56,7 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 		zap.Int("id", msg.ID),
 		zap.Int64("channel_id", peerID),
 		zap.String("content", msg.Message))
-	fmt.Printf("📨 正在处理消息: ID=%d, ChannelID=%d, 内容=\"%.50s...\"\n", msg.ID, peerID, msg.Message)
+	fmt.Printf("📨 收到新消息: ID=%d, 频道=%d, 内容=\"%.50s...\"\n", msg.ID, peerID, msg.Message)
 
 	p.messageCount++
 
@@ -104,8 +104,8 @@ func (p *MessageProcessor) handleEditMessage(ctx context.Context, msg *tg.Messag
 		zap.Int("edit_date", editDate),
 		zap.String("edit_type", editLabel),
 		zap.String("content", msg.Message))
-	fmt.Printf("✏️  处理编辑消息 (%s): ID=%d, ChannelID=%d, 编辑时间=%d, 内容=\"%.50s...\"\n",
-		editLabel, msg.ID, peerID, editDate, msg.Message)
+	fmt.Printf("📨 收到新消息[编辑]: ID=%d, 频道=%d, 内容=\"%.50s...\"\n",
+		msg.ID, peerID, msg.Message)
 
 	p.editedMsgCount++
 
@@ -115,9 +115,15 @@ func (p *MessageProcessor) handleEditMessage(ctx context.Context, msg *tg.Messag
 
 // processMessageContent 处理消息内容的通用逻辑（用于新消息和编辑消息）
 func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Message, peerID int64, isEdited bool) (int, int, error) {
+	msgType := "新消息"
+	if isEdited {
+		msgType = "编辑消息"
+	}
+
 	// 获取消息文本
 	text := msg.Message
 	if text == "" {
+		fmt.Printf("⏭️  %s跳过: 空消息 (ID=%d)\n", msgType, msg.ID)
 		return 0, 0, nil
 	}
 
@@ -126,6 +132,7 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 	hasNodeFormat := matchAny(text, p.config.Monitor.Filters.SS)
 
 	if !hasSubsFormat && !hasNodeFormat {
+		fmt.Printf("⏭️  %s跳过: 不包含订阅/节点格式 (ID=%d)\n", msgType, msg.ID)
 		return 0, 0, nil // 既不是订阅也不是节点，跳过
 	}
 
@@ -137,6 +144,7 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 		// 纯订阅格式，需要二次过滤
 		if !isWhitelisted && len(p.config.Monitor.Filters.ContentFilter) > 0 {
 			if !matchAny(text, p.config.Monitor.Filters.ContentFilter) {
+				fmt.Printf("⏭️  %s跳过: 未通过内容二次过滤 (ID=%d)\n", msgType, msg.ID)
 				return 0, 0, nil
 			}
 		}
@@ -146,12 +154,14 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 	// 提取链接
 	links := extractLinks(text)
 	if len(links) == 0 {
+		fmt.Printf("⏭️  %s跳过: 未提取到有效链接 (ID=%d)\n", msgType, msg.ID)
 		return 0, 0, nil
 	}
 
 	// 过滤黑名单链接
 	filteredLinks := filterLinks(links, p.config.Monitor.Filters.LinkBlacklist)
 	if len(filteredLinks) == 0 {
+		fmt.Printf("⏭️  %s跳过: 所有链接都在黑名单中 (ID=%d, 原始链接数=%d)\n", msgType, msg.ID, len(links))
 		return 0, 0, nil
 	}
 
@@ -164,6 +174,7 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 		msgTypeLabel = "编辑消息"
 	}
 
+	fmt.Printf("🔗 %s提取到 %d 个有效链接，准备提交... (ID=%d)\n", msgTypeLabel, len(filteredLinks), msg.ID)
 	p.ext.Log().Debug("准备发送链接到API",
 		zap.Int("message_id", msg.ID),
 		zap.String("type", msgTypeLabel),
@@ -193,6 +204,13 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 			}
 			fmt.Printf("%s %s-新%s: %s (频道: %d)\n", emoji, msgTypeLabel, linkType, link, peerID)
 		}
+	}
+
+	// 输出处理结果摘要
+	if subsCount > 0 || nodeCount > 0 {
+		fmt.Printf("✅ %s处理完成: 有效订阅=%d, 有效节点=%d (ID=%d)\n", msgTypeLabel, subsCount, nodeCount, msg.ID)
+	} else {
+		fmt.Printf("⚠️  %s处理完成: 所有链接提交失败 (ID=%d, 尝试数=%d)\n", msgTypeLabel, msg.ID, len(filteredLinks))
 	}
 
 	return subsCount, nodeCount, nil
@@ -351,7 +369,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 
 // fetchChannelHistory 获取频道历史消息
 func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID int64, limit int) error {
-	// fmt.Printf("📥 正在获取频道 %d 的历史消息（最多 %d 条）...\n", channelID, limit)
+	fmt.Printf("📥 开始获取频道 %d 的历史消息（最多 %d 条）...\n", channelID, limit)
 
 	// 保存频道名称
 	var channelTitle string

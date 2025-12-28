@@ -90,7 +90,9 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 	go func() {
 		fetchCount := p.config.Monitor.Features.FetchHistoryCount
 		if fetchCount > 0 && len(p.config.Monitor.Channels) > 0 {
-			p.ext.Log().Info(fmt.Sprintf("开始获取历史消息（每个频道 %d 条）...", fetchCount))
+			fmt.Printf("📥 历史消息功能: ✅ 已启用 (每个频道获取 %d 条)\n", fetchCount)
+			fmt.Printf("🔄 正在获取 %d 个频道的历史消息...\n", len(p.config.Monitor.Channels))
+			p.ext.Log().Info("开始获取历史消息", zap.Int("fetch_count", fetchCount))
 			// 使用一个新的后台 context，以防主 context 因为其他原因提前结束
 			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
@@ -100,7 +102,10 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 					p.ext.Log().Info("获取历史消息失败", zap.Int64("channel", channelID), zap.Error(err))
 				}
 			}
+			fmt.Printf("✅ 历史消息获取完成\n")
 			p.ext.Log().Info("历史消息获取完成")
+		} else {
+			fmt.Printf("📥 历史消息功能: ❌ 已禁用\n")
 		}
 	}()
 
