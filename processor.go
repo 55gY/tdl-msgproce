@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/telegram"
@@ -14,15 +15,18 @@ import (
 
 // MessageProcessor 消息处理器
 type MessageProcessor struct {
-	ext           *extension.Extension
-	config        *Config
-	api           *tg.Client
-	client        *telegram.Client
-	selfUserID    int64
-	messageCount  int64
-	forwardCount  int64
-	lastHeartbeat time.Time
-	messageCache  *MessageCache
+	ext            *extension.Extension
+	config         *Config
+	api            *tg.Client
+	client         *telegram.Client
+	selfUserID     int64
+	messageCount   int64
+	editedMsgCount int64 // 编辑消息计数
+	forwardCount   int64
+	lastHeartbeat  time.Time
+	messageCache   *MessageCache
+	channelPts     map[int64]int // 每个频道的 pts 状态
+	channelPtsMu   sync.RWMutex  // pts 状态的互斥锁
 }
 
 // getSelfUser 获取当前用户信息
@@ -63,7 +67,7 @@ func (p *MessageProcessor) RegisterHandlers(dispatcher tg.UpdateDispatcher) {
 	dispatcher.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
 			if _, _, err := p.handleMessage(ctx, msg, e); err != nil {
-				p.ext.Log().Info("处理消息失败", zap.Error(err))
+				p.ext.Log().Info("处理新消息失败", zap.Error(err))
 			}
 		}
 		return nil
@@ -72,8 +76,8 @@ func (p *MessageProcessor) RegisterHandlers(dispatcher tg.UpdateDispatcher) {
 	// 2. 处理被编辑的频道消息
 	dispatcher.OnEditChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateEditChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
-			if _, _, err := p.handleMessage(ctx, msg, e); err != nil {
-				p.ext.Log().Info("处理历史消息失败", zap.Error(err))
+			if _, _, err := p.handleEditMessage(ctx, msg, e); err != nil {
+				p.ext.Log().Info("处理编辑消息失败", zap.Error(err))
 			}
 		}
 		return nil

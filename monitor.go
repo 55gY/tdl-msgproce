@@ -15,33 +15,106 @@ import (
 	"go.uber.org/zap"
 )
 
-// handleMessage 处理单个消息，返回 (有效订阅数, 有效节点数, error)
+// handleMessage 处理新消息（非编辑），返回 (有效订阅数, 有效节点数, error)
 func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) (int, int, error) {
-	// 消息去重逻辑
-	if p.messageCache.Has(msg.ID) {
-		p.ext.Log().Info("消息重复，已跳过", zap.Int("message_id", msg.ID))
-		return 0, 0, nil
-	}
-	p.messageCache.Add(msg.ID) // 存入缓存
-
 	peerID := getPeerID(msg.PeerID)
 
+	// 获取编辑时间（如果有）
+	editDate := 0
+	if date, ok := msg.GetEditDate(); ok {
+		editDate = date
+	}
+
+	// 使用新的缓存方法检查是否为编辑或重复
+	isEdit, shouldProcess := p.messageCache.AddOrUpdate(peerID, msg.ID, editDate)
+
+	if !shouldProcess {
+		// 真正的重复消息（既不是新消息也不是编辑更新）
+		p.ext.Log().Info("消息重复，已跳过",
+			zap.Int("message_id", msg.ID),
+			zap.Int64("channel_id", peerID))
+		return 0, 0, nil
+	}
+
+	if isEdit {
+		// 这是一条编辑更新的消息，但通过 NewChannelMessage 事件收到
+		// 正常情况下不应该发生，但为了健壮性记录一下
+		p.ext.Log().Warn("通过新消息事件收到编辑消息",
+			zap.Int("message_id", msg.ID),
+			zap.Int64("channel_id", peerID))
+	}
+
 	// 检查是否是监听的频道
-	// 仅当配置文件中的频道列表（channels）不为空时，才进行过滤
 	if len(p.config.Monitor.Channels) > 0 {
 		if !contains(p.config.Monitor.Channels, peerID) {
-			// 如果消息的来源频道/群组不在监听列表中，则直接跳过，不处理
 			return 0, 0, nil
 		}
 	}
-	// 如果 `channels` 列表为空，则默认处理所有接收到的频道/群组消息
 
 	// 打印调试日志
-	p.ext.Log().Info("处理新消息", zap.Int("id", msg.ID), zap.Int64("channel_id", peerID), zap.String("content", msg.Message))
+	p.ext.Log().Info("处理新消息",
+		zap.Int("id", msg.ID),
+		zap.Int64("channel_id", peerID),
+		zap.String("content", msg.Message))
 	fmt.Printf("📨 正在处理消息: ID=%d, ChannelID=%d, 内容=\"%.50s...\"\n", msg.ID, peerID, msg.Message)
 
 	p.messageCount++
 
+	// 调用通用的消息处理逻辑
+	return p.processMessageContent(ctx, msg, peerID, false)
+}
+
+// handleEditMessage 处理编辑的消息，返回 (有效订阅数, 有效节点数, error)
+func (p *MessageProcessor) handleEditMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) (int, int, error) {
+	peerID := getPeerID(msg.PeerID)
+
+	// 获取编辑时间
+	editDate := 0
+	if date, ok := msg.GetEditDate(); ok {
+		editDate = date
+	}
+
+	// 使用新的缓存方法检查是否为编辑或重复
+	isEdit, shouldProcess := p.messageCache.AddOrUpdate(peerID, msg.ID, editDate)
+
+	if !shouldProcess {
+		// 编辑时间未更新，可能是重复的编辑事件
+		p.ext.Log().Debug("编辑消息重复，已跳过",
+			zap.Int("message_id", msg.ID),
+			zap.Int64("channel_id", peerID),
+			zap.Int("edit_date", editDate))
+		return 0, 0, nil
+	}
+
+	// 检查是否是监听的频道
+	if len(p.config.Monitor.Channels) > 0 {
+		if !contains(p.config.Monitor.Channels, peerID) {
+			return 0, 0, nil
+		}
+	}
+
+	// 打印调试日志
+	editLabel := "首次编辑"
+	if isEdit {
+		editLabel = "再次编辑"
+	}
+	p.ext.Log().Info("处理编辑消息",
+		zap.Int("id", msg.ID),
+		zap.Int64("channel_id", peerID),
+		zap.Int("edit_date", editDate),
+		zap.String("edit_type", editLabel),
+		zap.String("content", msg.Message))
+	fmt.Printf("✏️  处理编辑消息 (%s): ID=%d, ChannelID=%d, 编辑时间=%d, 内容=\"%.50s...\"\n",
+		editLabel, msg.ID, peerID, editDate, msg.Message)
+
+	p.editedMsgCount++
+
+	// 调用通用的消息处理逻辑
+	return p.processMessageContent(ctx, msg, peerID, true)
+}
+
+// processMessageContent 处理消息内容的通用逻辑（用于新消息和编辑消息）
+func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Message, peerID int64, isEdited bool) (int, int, error) {
 	// 获取消息文本
 	text := msg.Message
 	if text == "" {
@@ -85,13 +158,21 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	// 发送到订阅 API
 	subsCount := 0
 	nodeCount := 0
+
+	msgTypeLabel := "新消息"
+	if isEdited {
+		msgTypeLabel = "编辑消息"
+	}
+
 	p.ext.Log().Debug("准备发送链接到API",
 		zap.Int("message_id", msg.ID),
+		zap.String("type", msgTypeLabel),
 		zap.Int("filtered_links_count", len(filteredLinks)))
+
 	for _, link := range filteredLinks {
 		p.ext.Log().Debug("调用addSubscription", zap.String("link", link))
 		if err := p.addSubscription(link); err != nil {
-			p.ext.Log().Info("发送订阅失败",
+			p.ext.Log().Info(fmt.Sprintf("%s-发送订阅失败", msgTypeLabel),
 				zap.String("link", link),
 				zap.Error(err))
 		} else {
@@ -102,10 +183,15 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 			} else {
 				subsCount++
 			}
-			p.ext.Log().Info(fmt.Sprintf("新%s", linkType),
+			p.ext.Log().Info(fmt.Sprintf("%s-新%s", msgTypeLabel, linkType),
 				zap.Int64("channel", peerID),
 				zap.String("link", link))
-			fmt.Printf("✅ 新%s: %s (频道: %d)\n", linkType, link, peerID)
+
+			emoji := "✅"
+			if isEdited {
+				emoji = "🔄"
+			}
+			fmt.Printf("%s %s-新%s: %s (频道: %d)\n", emoji, msgTypeLabel, linkType, link, peerID)
 		}
 	}
 
@@ -409,19 +495,28 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 	// 处理每条消息，统计有效订阅和节点
 	totalSubs := 0
 	totalNodes := 0
-	totalLinks := 0 // 提取到的订阅/节点总数
+	totalLinks := 0                           // 提取到的订阅/节点总数
 	for i := len(messages) - 1; i >= 0; i-- { // 倒序处理，从旧到新
 		msg, ok := messages[i].(*tg.Message)
 		if !ok {
 			continue
 		}
 
-		// 实现去重逻辑
-		if p.messageCache.Has(msg.ID) {
+		// 获取编辑时间（如果有）
+		editDate := 0
+		if date, ok := msg.GetEditDate(); ok {
+			editDate = date
+		}
+
+		// 使用新的缓存方法进行去重检查
+		_, shouldProcess := p.messageCache.AddOrUpdate(channelID, msg.ID, editDate)
+		if !shouldProcess {
 			continue // 如果已处理，则跳过
 		}
-		p.messageCache.Add(msg.ID)
-		p.ext.Log().Debug("处理历史消息", zap.Int("message_id", msg.ID), zap.Int64("channel_id", channelID))
+
+		p.ext.Log().Debug("处理历史消息",
+			zap.Int("message_id", msg.ID),
+			zap.Int64("channel_id", channelID))
 
 		// 统计提取的链接数（在处理之前）
 		text := msg.Message
@@ -438,14 +533,8 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 			}
 		}
 
-		// 构建 entities（简化版）
-		entities := tg.Entities{
-			Users: make(map[int64]*tg.User),
-			Chats: make(map[int64]*tg.Chat),
-		}
-
-		// 使用现有的 handleMessage 处理
-		subsCount, nodeCount, _ := p.handleMessage(ctx, msg, entities)
+		// 直接调用 processMessageContent 处理历史消息（不需要重复去重检查）
+		subsCount, nodeCount, _ := p.processMessageContent(ctx, msg, channelID, false)
 		totalSubs += subsCount
 		totalNodes += nodeCount
 	}
