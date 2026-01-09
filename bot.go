@@ -514,13 +514,33 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 	if resp.StatusCode == 200 {
 		// 检查是否为检测模式响应
 		if response.TestedNodes != nil {
-			// 检测模式响应
+			// 检测模式响应 - 判断是否有节点被添加
 			var msg string
-			if isNode {
-				msg = "✅ 节点检测并添加成功\n"
+			var success bool
+			
+			// 判断是否有节点被成功添加
+			if response.AddedNodes != nil && *response.AddedNodes > 0 {
+				// 成功情况：有节点被添加
+				success = true
+				if isNode {
+					msg = "✅ 节点检测并添加成功\n"
+				} else {
+					msg = "✅ 订阅检测并添加成功\n"
+				}
 			} else {
-				msg = "✅ 订阅检测并添加成功\n"
+				// 失败情况：没有节点被添加
+				success = false
+				// 使用 API 返回的错误信息，如果没有则使用默认消息
+				if response.Error != "" {
+					msg = fmt.Sprintf("❌ %s\n", response.Error)
+				} else if isNode {
+					msg = "❌ 节点检测失败，未添加任何节点\n"
+				} else {
+					msg = "❌ 订阅检测失败，未添加任何节点\n"
+				}
 			}
+			
+			// 添加统计信息（成功和失败都显示）
 			msg += fmt.Sprintf("📊 检测: %d个节点\n", *response.TestedNodes)
 			if response.PassedNodes != nil {
 				msg += fmt.Sprintf("✅ 通过: %d个\n", *response.PassedNodes)
@@ -537,11 +557,21 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 			if response.Timeout != nil && *response.Timeout && response.Warning != "" {
 				msg += "\n⚠️ " + response.Warning
 			}
-			p.ext.Log().Info(fmt.Sprintf("%s检测并添加成功", linkType),
-				zap.String("link", link),
-				zap.Int("tested", *response.TestedNodes),
-				zap.String("duration", response.Duration))
-			return true, msg
+			
+			// 记录日志
+			if success {
+				p.ext.Log().Info(fmt.Sprintf("%s检测并添加成功", linkType),
+					zap.String("link", link),
+					zap.Int("tested", *response.TestedNodes),
+					zap.String("duration", response.Duration))
+			} else {
+				p.ext.Log().Info(fmt.Sprintf("%s检测失败，未添加节点", linkType),
+					zap.String("link", link),
+					zap.Int("tested", *response.TestedNodes),
+					zap.String("duration", response.Duration))
+			}
+			
+			return success, msg
 		} else {
 			// 普通模式响应
 			successMsg := response.Message
