@@ -583,6 +583,45 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 		}
 	}
 
+	// 处理检测失败的情况（400状态码但包含检测统计信息）
+	if resp.StatusCode == 400 && response.TestedNodes != nil {
+		// 检测模式响应 - 检测失败
+		var msg string
+		// 使用 API 返回的错误信息，如果没有则使用默认消息
+		if response.Error != "" {
+			msg = fmt.Sprintf("❌ %s\n", response.Error)
+		} else if isNode {
+			msg = "❌ 节点检测失败，未添加任何节点\n"
+		} else {
+			msg = "❌ 订阅检测失败，未添加任何节点\n"
+		}
+		
+		// 添加统计信息
+		msg += fmt.Sprintf("📊 检测: %d个节点\n", *response.TestedNodes)
+		if response.PassedNodes != nil {
+			msg += fmt.Sprintf("✅ 通过: %d个\n", *response.PassedNodes)
+		}
+		if response.FailedNodes != nil {
+			msg += fmt.Sprintf("❌ 失败: %d个\n", *response.FailedNodes)
+		}
+		if response.AddedNodes != nil {
+			msg += fmt.Sprintf("➕ 添加: %d个\n", *response.AddedNodes)
+		}
+		if response.Duration != "" {
+			msg += fmt.Sprintf("⏱️ 耗时: %s", response.Duration)
+		}
+		if response.Timeout != nil && *response.Timeout && response.Warning != "" {
+			msg += "\n⚠️ " + response.Warning
+		}
+		
+		p.ext.Log().Info(fmt.Sprintf("%s检测失败，未添加节点", linkType),
+			zap.String("link", link),
+			zap.Int("tested", *response.TestedNodes),
+			zap.String("duration", response.Duration))
+		
+		return false, msg
+	}
+
 	// 处理重复订阅或节点（409 Conflict）
 	if resp.StatusCode == 409 || resp.StatusCode == http.StatusConflict {
 		errorMsg := response.Error
