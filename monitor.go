@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -152,14 +151,14 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 	// 如果是节点格式（hasNodeFormat为true），则跳过二次过滤
 
 	// 提取链接
-	links := extractLinks(text)
+	links := p.ExtractAllLinks(text)
 	if len(links) == 0 {
 		fmt.Printf("⏭️  %s跳过: 未提取到有效链接 (ID=%d)\n", msgType, msg.ID)
 		return 0, 0, nil
 	}
 
 	// 过滤黑名单链接
-	filteredLinks := filterLinks(links, p.config.Monitor.Filters.LinkBlacklist)
+	filteredLinks := p.FilterLinks(links, p.config.Monitor.Filters.LinkBlacklist)
 	if len(filteredLinks) == 0 {
 		fmt.Printf("⏭️  %s跳过: 所有链接都在黑名单中 (ID=%d, 原始链接数=%d)\n", msgType, msg.ID, len(links))
 		return 0, 0, nil
@@ -188,7 +187,7 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 				zap.Error(err))
 		} else {
 			linkType := "订阅"
-			if isProxyNode(link) {
+			if p.IsProxyNode(link) {
 				linkType = "节点"
 				nodeCount++
 			} else {
@@ -230,7 +229,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 	apiURL := p.config.Monitor.SubscriptionAPI.AddURL
 
 	// 判断是订阅链接还是单个节点
-	isNodeLink := isProxyNode(link)
+	isNodeLink := p.isProxyNode(link)
 
 	// 构建请求体
 	type SubscriptionRequest struct {
@@ -605,25 +604,3 @@ func matchAny(text string, patterns []string) bool {
 	return false
 }
 
-func extractLinks(text string) []string {
-	// 匹配 http/https 链接，支持中文标点
-	re := regexp.MustCompile(`https?://[^\s\x{FF0C}\x{3002}\x{FF1F}\x{FF01}\x{FF1B}\x{FF1A}\x{201C}\x{201D}\x{2018}\x{2019}]+`)
-	return re.FindAllString(text, -1)
-}
-
-func filterLinks(links []string, blacklist []string) []string {
-	var filtered []string
-	for _, link := range links {
-		blocked := false
-		for _, keyword := range blacklist {
-			if strings.Contains(strings.ToLower(link), strings.ToLower(keyword)) {
-				blocked = true
-				break
-			}
-		}
-		if !blocked {
-			filtered = append(filtered, link)
-		}
-	}
-	return filtered
-}

@@ -243,10 +243,20 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 	// 提取链接或频道用户名
 	links := extractTelegramLinks(text)
 	if len(links) == 0 {
-		// 检查是否是订阅链接（http/https 但不是 t.me）
-		if subLink := extractSubscriptionLink(text); subLink != "" {
-			p.handleSubscriptionLink(ctx, bot, msg, subLink)
-			return
+		// 检查是否是订阅链接或节点链接
+		allLinks := p.ExtractAllLinks(text)
+		if len(allLinks) > 0 {
+			// 过滤非 t.me 链接
+			nonTgLinks := make([]string, 0)
+			for _, link := range allLinks {
+				if !strings.Contains(link, "t.me") {
+					nonTgLinks = append(nonTgLinks, link)
+				}
+			}
+			if len(nonTgLinks) > 0 {
+				p.handleSubscriptionLinks(ctx, bot, msg, nonTgLinks)
+				return
+			}
 		}
 
 		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
@@ -333,66 +343,57 @@ func (p *MessageProcessor) updateBotMessage(bot *tgbotapi.BotAPI, chatID int64, 
 }
 
 // handleSubscriptionLink 处理订阅链接或代理节点
-func (p *MessageProcessor) handleSubscriptionLink(ctx context.Context, bot *tgbotapi.BotAPI, msg *tgbotapi.Message, link string) {
-	isNode := isProxyNode(link)
-	linkType := "订阅链接"
-	if isNode {
-		linkType = "代理节点"
-	}
-
-	p.ext.Log().Info(fmt.Sprintf("检测到%s: %s", linkType, link))
-
+// handleSubscriptionLinks 处理多个订阅/节点链接
+func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgbotapi.BotAPI, msg *tgbotapi.Message, links []string) {
 	// 发送处理中消息
-	statusMsg := p.sendBotMessage(bot, msg.Chat.ID, fmt.Sprintf("⏳ 正在添加%s...", linkType))
+	statusMsg := p.sendBotMessage(bot, msg.Chat.ID, fmt.Sprintf("⏳ 正在处理 %d 个链接...", len(links)))
 	if statusMsg == nil {
 		return
 	}
 
-	// 添加订阅或节点到 API
-	success, responseMsg := p.addSubscriptionToAPI(link, isNode)
+	subsCount := 0
+	nodeCount := 0
+	failedCount := 0
+	responseMessages := make([]string, 0)
 
-	if success {
-		p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s", linkType, link))
-	} else {
-		p.ext.Log().Info(fmt.Sprintf("%s添加失败: %s", linkType, link))
+	for _, link := range links {
+		isNode := p.IsProxyNode(link)
+		linkType := "订阅"
+		if isNode {
+			linkType = "节点"
+		}
+
+		p.ext.Log().Info(fmt.Sprintf("检测到%s: %s", linkType, link))
+
+		// 添加到 API
+		success, responseMsg := p.addSubscriptionToAPI(link, isNode)
+
+		if success {
+			if isNode {
+				nodeCount++
+			} else {
+				subsCount++
+			}
+			p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s", linkType, link))
+			responseMessages = append(responseMessages, fmt.Sprintf("✅ %s添加成功", linkType))
+		} else {
+			failedCount++
+			p.ext.Log().Error(fmt.Sprintf("%s添加失败: %s - %s", linkType, link, responseMsg))
+			responseMessages = append(responseMessages, fmt.Sprintf("❌ %s添加失败: %s", linkType, responseMsg))
+		}
 	}
+
+	// 构建汇总消息
+	summary := fmt.Sprintf("📊 处理完成:\n✅ 订阅: %d\n✅ 节点: %d\n❌ 失败: %d\n\n", subsCount, nodeCount, failedCount)
+	finalMsg := summary + strings.Join(responseMessages, "\n")
 
 	// 更新状态消息
-	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, responseMsg)
+	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, finalMsg)
 }
 
-// extractSubscriptionLink 提取订阅链接（非 t.me 的 http/https）或代理节点链接
-func extractSubscriptionLink(text string) string {
-	// 查找 http/https 链接但不是 t.me
-	parts := strings.Fields(text)
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		// 检查是否为代理节点链接
-		if isProxyNode(part) {
-			return part
-		}
-		// 检查是否为订阅链接（http/https 但不是 t.me）
-		if (strings.HasPrefix(part, "http://") || strings.HasPrefix(part, "https://")) &&
-			!strings.Contains(part, "t.me") {
-			return part
-		}
-	}
-	return ""
-}
-
-// isProxyNode 判断是否为代理节点链接
-func isProxyNode(link string) bool {
-	prefixes := []string{
-		"vmess://", "vless://", "ss://", "ssr://",
-		"trojan://", "hysteria://", "hysteria2://", "hy2://",
-	}
-	linkLower := strings.ToLower(link)
-	for _, prefix := range prefixes {
-		if strings.HasPrefix(linkLower, prefix) {
-			return true
-		}
-	}
-	return false
+// handleSubscriptionLink 处理单个订阅/节点链接 (保持兼容性)
+func (p *MessageProcessor) handleSubscriptionLink(ctx context.Context, bot *tgbotapi.BotAPI, msg *tgbotapi.Message, link string) {
+	p.handleSubscriptionLinks(ctx, bot, msg, []string{link})
 }
 
 // extractTelegramLinks 提取 Telegram 链接
