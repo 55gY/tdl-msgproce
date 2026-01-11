@@ -24,7 +24,45 @@
 - ✅ **原生集成** - 直接使用 tdl 功能，无需额外脚本
 - ✅ **自动发布** - 推送包含版本号的提交即可自动发布 Release
 
-## 🔗 相关项目
+## � 快速安装
+
+### 一键安装（推荐）
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/55gY/tdl-msgproce/main/install.sh)
+```
+
+**如果上述命令失败，可使用传统方式：**
+```bash
+curl -sSL https://raw.githubusercontent.com/55gY/tdl-msgproce/main/install.sh -o install.sh
+chmod +x install.sh
+./install.sh
+```
+
+**安装脚本功能：**
+- ✅ 自动检测系统架构（Linux/Darwin, amd64/arm64）
+- ✅ 从 GitHub Releases 自动下载 tdl 和 tdl-msgproce
+- ✅ 安装到标准目录（`~/.tdl/extensions/`）
+- ✅ 创建配置文件模板
+- ✅ 引导完成 Telegram 登录
+- ✅ 提供交互式菜单管理
+- ✅ 支持 systemd 服务安装
+
+**安装脚本菜单：**
+1. 完整安装（tdl + msgproce + 配置）
+2. 仅安装 tdl
+3. 仅安装 msgproce 扩展
+4. 控制台启动（前台运行）
+5. 安装 systemd 服务（后台运行）
+6. 停止运行
+7. 重启服务
+8. 环境检测
+9. 查看状态
+10. 查看日志
+11. 编辑配置
+12. 完全卸载
+
+## �🔗 相关项目
 
 本项目是系列项目之一，各项目关系如下：
 
@@ -114,7 +152,7 @@ https://another.com/sub2
 # 以上消息会自动识别 3 个链接并分别处理
 ```
 
-## 配置文件
+## 📝 配置文件
 
 `config.yaml` 包含三部分配置：
 
@@ -201,39 +239,7 @@ monitor:
    - `whitelist_channels` 中的频道跳过二次内容过滤
    - 所有匹配订阅格式的链接直接提交
 
-## 🚀 快速安装
-
-### 方法一：一键安装脚本（推荐）
-
-```bash
-# 下载并运行安装脚本
-curl -sSL https://raw.githubusercontent.com/55gY/tdl-msgproce/main/install.sh -o install.sh
-chmod +x install.sh
-./install.sh
-```
-
-**安装脚本功能：**
-- ✅ 自动检测系统架构（Linux/Darwin, amd64/arm64）
-- ✅ 从 GitHub Releases 自动下载 tdl 和 tdl-msgproce
-- ✅ 安装到标准目录（`~/.tdl/extensions/`）
-- ✅ 创建配置文件模板
-- ✅ 引导完成 Telegram 登录
-- ✅ 提供交互式菜单管理
-- ✅ 支持 systemd 服务安装
-
-**安装脚本菜单：**
-1. 完整安装（tdl + msgproce + 配置）
-2. 仅安装 tdl
-3. 仅安装 msgproce 扩展
-4. 控制台启动（前台运行）
-5. 安装 systemd 服务（后台运行）
-6. 停止运行
-7. 重启服务
-8. 环境检测
-9. 查看状态
-10. 查看日志
-11. 编辑配置
-12. 完全卸载
+## � 其他安装方式
 
 ### 方法二：下载预编译文件
 
