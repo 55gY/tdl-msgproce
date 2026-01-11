@@ -229,7 +229,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 	apiURL := p.config.Monitor.SubscriptionAPI.AddURL
 
 	// 判断是订阅链接还是单个节点
-	isNodeLink := p.isProxyNode(link)
+	isNodeLink := p.IsProxyNode(link)
 
 	// 构建请求体
 	type SubscriptionRequest struct {
@@ -542,9 +542,9 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 			hasSubsFormat := matchAny(text, p.config.Monitor.Filters.Subs)
 			hasNodeFormat := matchAny(text, p.config.Monitor.Filters.SS)
 			if hasSubsFormat || hasNodeFormat {
-				links := extractLinks(text)
+				links := p.ExtractAllLinks(text)
 				if len(links) > 0 {
-					filteredLinks := filterLinks(links, p.config.Monitor.Filters.LinkBlacklist)
+					filteredLinks := p.FilterLinks(links, p.config.Monitor.Filters.LinkBlacklist)
 					totalLinks += len(filteredLinks)
 				}
 			}
