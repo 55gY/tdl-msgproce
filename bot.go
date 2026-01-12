@@ -351,9 +351,6 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 		return
 	}
 
-	subsCount := 0
-	nodeCount := 0
-	failedCount := 0
 	responseMessages := make([]string, 0)
 
 	for _, link := range links {
@@ -365,27 +362,21 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 
 		p.ext.Log().Info(fmt.Sprintf("检测到%s: %s", linkType, link))
 
-		// 添加到 API
+		// 添加到 API，获取详细响应信息
 		success, responseMsg := p.addSubscriptionToAPI(link, isNode)
 
 		if success {
-			if isNode {
-				nodeCount++
-			} else {
-				subsCount++
-			}
 			p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s", linkType, link))
-			responseMessages = append(responseMessages, fmt.Sprintf("✅ %s添加成功", linkType))
 		} else {
-			failedCount++
 			p.ext.Log().Error(fmt.Sprintf("%s添加失败: %s - %s", linkType, link, responseMsg))
-			responseMessages = append(responseMessages, fmt.Sprintf("❌ %s添加失败: %s", linkType, responseMsg))
 		}
+		
+		// 直接使用 API 返回的详细消息（包含检测统计信息）
+		responseMessages = append(responseMessages, responseMsg)
 	}
 
-	// 构建汇总消息
-	summary := fmt.Sprintf("📊 处理完成:\n✅ 订阅: %d\n✅ 节点: %d\n❌ 失败: %d\n\n", subsCount, nodeCount, failedCount)
-	finalMsg := summary + strings.Join(responseMessages, "\n")
+	// 直接使用详细响应消息，不需要简单汇总
+	finalMsg := strings.Join(responseMessages, "\n\n")
 
 	// 更新状态消息
 	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, finalMsg)
