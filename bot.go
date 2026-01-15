@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -1045,6 +1046,11 @@ func (p *MessageProcessor) executeSSCommand(ctx context.Context, subCmd string) 
 	if stderr.Len() > 0 {
 		output += "\n" + stderr.String()
 	}
+
+	// 移除 ANSI 颜色代码（如 [0;34m, [0;32m, [0m, [1;33m 等）
+	// 匹配 ESC[ 序列和简化的 [ 序列
+	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*m|\[0;[0-9]+m|\[1;[0-9]+m|\[0m`)
+	output = ansiRegex.ReplaceAllString(output, "")
 
 	// 检查错误
 	if err != nil {
