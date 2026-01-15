@@ -8,6 +8,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -224,7 +227,10 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 				"2️⃣ 添加订阅\n"+
 				"   • 发送订阅链接 (http/https 格式)\n"+
 				"   • 自动添加到监听系统\n\n"+
-				"3️⃣ 查看状态\n"+
+				"3️⃣ SS 配置管理\n"+
+				"   • /ss config - 查看 SS 配置\n"+
+				"   • /ss auto - 自动安装/重置 SS\n\n"+
+				"4️⃣ 查看状态\n"+
 				"   • 使用 /status 查看运行状态")
 		return
 	}
@@ -237,6 +243,63 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 			"🎯 转发目标: %d",
 			p.messageCount, p.forwardCount, p.config.Bot.ForwardTarget)
 		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID, status)
+		return
+	}
+
+	// 处理 /ss 命令
+	if strings.HasPrefix(text, "/ss") {
+		parts := strings.Fields(text)
+		if len(parts) < 2 {
+			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+				"❌ 用法错误\n\n"+
+					"使用方法: /ss [config|auto]\n\n"+
+					"• /ss config - 查看 SS 配置\n"+
+					"• /ss auto - 自动安装/重置 SS")
+			return
+		}
+
+		subCmd := parts[1]
+		// 验证子命令（白名单）
+		if subCmd != "config" && subCmd != "auto" {
+			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+				"❌ 无效的子命令\n\n"+
+					"支持的命令:\n"+
+					"• /ss config - 查看 SS 配置\n"+
+					"• /ss auto - 自动安装/重置 SS")
+			return
+		}
+
+		// 发送执行中的提示
+		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+			fmt.Sprintf("⏳ 正在执行 /ss %s...\n\n下载并执行脚本中，最多等待 5 分钟", subCmd))
+
+		// 异步执行脚本
+		go func() {
+			p.ext.Log().Info("执行 SS 命令",
+				zap.Int64("userID", msg.From.ID),
+				zap.String("command", subCmd))
+
+			output, err := p.executeSSCommand(ctx, subCmd)
+			if err != nil {
+				p.ext.Log().Error("SS 命令执行失败",
+					zap.Error(err),
+					zap.String("command", subCmd))
+				p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+					fmt.Sprintf("❌ 执行失败:\n\n%s", err.Error()))
+				return
+			}
+
+			// 截断输出到 4000 字符（Telegram 限制）
+			if len(output) > 4000 {
+				output = output[:3900] + "\n\n... (输出过长已截断)"
+			}
+
+			p.ext.Log().Info("SS 命令执行成功",
+				zap.String("command", subCmd))
+
+			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+				fmt.Sprintf("✅ 执行完成:\n\n%s", output))
+		}()
 		return
 	}
 
@@ -871,4 +934,130 @@ func (p *MessageProcessor) handleCallbackQuery(ctx context.Context, bot *tgbotap
 		callback := tgbotapi.NewCallback(query.ID, "⚠️ 任务不存在或已完成")
 		bot.Request(callback)
 	}
+}
+
+// downloadSSScript 从 GitHub 下载脚本到临时文件
+func (p *MessageProcessor) downloadSSScript() (string, error) {
+	const scriptURL = "https://raw.githubusercontent.com/55gY/cmd/main/cmd.sh"
+
+	// 验证 HTTPS
+	if !strings.HasPrefix(scriptURL, "https://") {
+		return "", fmt.Errorf("安全错误：仅允许 HTTPS URL")
+	}
+
+	// 创建 HTTP 客户端（参考现有代码模式）
+	client := &http.Client{
+		Timeout: 120 * time.Second,
+	}
+
+	// 创建请求
+	req, err := http.NewRequest("GET", scriptURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	p.ext.Log().Info("下载 SS 脚本", zap.String("url", scriptURL))
+
+	// 发送请求
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("下载失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 检查状态码
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("下载失败，HTTP %d", resp.StatusCode)
+	}
+
+	// 创建临时文件
+	tmpFile, err := os.CreateTemp("", "cmd-*.sh")
+	if err != nil {
+		return "", fmt.Errorf("创建临时文件失败: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	// 写入脚本内容
+	_, err = io.Copy(tmpFile, resp.Body)
+	tmpFile.Close()
+	if err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("写入脚本失败: %w", err)
+	}
+
+	// 设置可执行权限（仅 Unix 系统）
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(tmpPath, 0700); err != nil {
+			os.Remove(tmpPath)
+			return "", fmt.Errorf("设置执行权限失败: %w", err)
+		}
+	}
+
+	p.ext.Log().Info("脚本下载成功", zap.String("tmpPath", tmpPath))
+	return tmpPath, nil
+}
+
+// executeSSCommand 执行 SS 命令（下载脚本并执行）
+func (p *MessageProcessor) executeSSCommand(ctx context.Context, subCmd string) (string, error) {
+	// 下载脚本
+	tmpPath, err := p.downloadSSScript()
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpPath) // 确保清理临时文件
+
+	// 创建 5 分钟超时的 context
+	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	// 检测系统并找到 bash
+	var bashPath string
+	if runtime.GOOS == "windows" {
+		// Windows: 查找 bash（Git Bash 或 WSL）
+		if path, err := exec.LookPath("bash"); err == nil {
+			bashPath = path
+		} else {
+			return "", fmt.Errorf("Windows 系统需要 Git Bash 或 WSL\n请安装 Git for Windows: https://git-scm.com/")
+		}
+	} else {
+		// Linux/macOS
+		bashPath = "/bin/bash"
+	}
+
+	p.ext.Log().Info("执行脚本",
+		zap.String("bash", bashPath),
+		zap.String("script", tmpPath),
+		zap.String("subCmd", subCmd))
+
+	// 执行脚本：bash tmpPath ss subCmd
+	cmd := exec.CommandContext(execCtx, bashPath, tmpPath, "ss", subCmd)
+
+	// 捕获标准输出和错误输出
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// 执行命令
+	err = cmd.Run()
+
+	// 合并输出
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		output += "\n" + stderr.String()
+	}
+
+	// 检查错误
+	if err != nil {
+		// 检查是否超时
+		if execCtx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("脚本执行超过 5 分钟已终止")
+		}
+		// 返回错误和输出
+		if output != "" {
+			return "", fmt.Errorf("脚本执行失败: %w\n\n输出:\n%s", err, output)
+		}
+		return "", fmt.Errorf("脚本执行失败: %w", err)
+	}
+
+	return output, nil
 }
