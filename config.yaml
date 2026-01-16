@@ -60,6 +60,14 @@ monitor:
       - "hy2://"
       - "tuic://"
       - "juicity://"
+      - "AnyTLS://"
+      - "Mieru://"
+      - "Sudoku://"
+      - "WireGuard://"
+      - "Snell://"
+      - "HTTP://"
+      - "SOCKS://"
+
 
     # 内容过滤 - 二次过滤，消息内容必须包含这些词之一
     content_filter:
