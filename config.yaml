@@ -45,28 +45,29 @@ monitor:
   # 过滤配置
   filters:
     # 订阅格式过滤 - 订阅链接必须包含这些关键词之一，会进行二次内容过滤
+    # 按协议长度降序排列，确保长协议优先匹配
     subs:
-      - "https://"
-      - "http://"
+      - "https://"  # 5字符
+      - "http://"   # 4字符
     # 节点格式过滤 - 全频道/群组 不受监听频道列表控制 - 节点链接必须匹配这些协议之一，不进行二次内容过滤
+    # 按协议长度降序排列，确保长协议优先匹配（如 hysteria2 在 hysteria 前，ssr 在 ss 前）
     ss:
-      - "vmess://"
-      - "vless://"
-      - "ss://"
-      - "ssr://"
-      - "trojan://"
-      - "hysteria://"
-      - "hysteria2://"
-      - "hy2://"
-      - "tuic://"
-      - "juicity://"
-      - "AnyTLS://"
-      - "Mieru://"
-      - "Sudoku://"
-      - "WireGuard://"
-      - "Snell://"
-      - "HTTP://"
-      - "SOCKS://"
+      - "hysteria2://"  # 9字符
+      - "WireGuard://"  # 9字符
+      - "hysteria://"   # 8字符
+      - "juicity://"    # 7字符
+      - "AnyTLS://"     # 6字符
+      - "Mieru://"      # 5字符
+      - "Snell://"      # 5字符
+      - "SOCKS://"      # 5字符
+      - "trojan://"     # 6字符
+      - "vmess://"      # 5字符
+      - "vless://"      # 5字符
+      - "tuic://"       # 4字符
+      - "ssr://"        # 3字符
+      - "hy2://"        # 3字符
+      - "ss://"         # 2字符
+      - "Sudoku://"     # 6字符
 
 
     # 内容过滤 - 二次过滤，消息内容必须包含这些词之一

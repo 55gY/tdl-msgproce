@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type MessageProcessor struct {
 	messageCache   *MessageCache
 	channelPts     map[int64]int // 每个频道的 pts 状态
 	channelPtsMu   sync.RWMutex  // pts 状态的互斥锁
+	linkRegex      *regexp.Regexp // 预编译的链接提取正则表达式
 }
 
 // getSelfUser 获取当前用户信息

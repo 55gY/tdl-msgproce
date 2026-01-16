@@ -59,6 +59,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 		selfUserID:   self.ID,
 		messageCache: NewMessageCache(20000),
 		channelPts:   make(map[int64]int), // 初始化 pts 状态
+		linkRegex:    buildLinkRegex(config, ext.Log()), // 预编译链接提取正则
 	}
 
 	// 5. 调用新方法，将所有的消息处理逻辑注册到 dispatcher 中
