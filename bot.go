@@ -407,6 +407,101 @@ func (p *MessageProcessor) updateBotMessage(bot *tgbotapi.BotAPI, chatID int64, 
 }
 
 // handleSubscriptionLink 处理订阅链接或代理节点
+// addNodesBatchToAPI 批量添加节点到 API
+func (p *MessageProcessor) addNodesBatchToAPI(nodes []string) (bool, *SubscriptionResponse) {
+	if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
+		return false, nil
+	}
+
+	if len(nodes) == 0 {
+		return false, nil
+	}
+
+	apiURL := p.config.Monitor.SubscriptionAPI.AddURL
+
+	// 将多个节点用\n连接
+	batchSS := strings.Join(nodes, "\n")
+
+	reqBody := SubscriptionRequest{
+		SS:   batchSS,
+		Test: true,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		p.ext.Log().Info("JSON 序列化失败", zap.Error(err))
+		return false, nil
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		p.ext.Log().Info("创建请求失败", zap.Error(err))
+		return false, nil
+	}
+
+	req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	p.ext.Log().Info(fmt.Sprintf("发送批量节点请求到 %s，共 %d 个节点", apiURL, len(nodes)))
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		p.ext.Log().Info("批量节点 API 请求失败", zap.Error(err))
+		return false, nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		p.ext.Log().Info("读取响应失败", zap.Error(err))
+		return false, nil
+	}
+
+	// 记录原始响应（用于调试）
+	p.ext.Log().Info("API 响应", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
+
+	var response SubscriptionResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		p.ext.Log().Info("解析响应失败",
+			zap.Error(err),
+			zap.String("body", string(body)),
+			zap.Int("status", resp.StatusCode))
+
+		// 如果是 200 状态码但解析失败，可能是纯文本响应
+		if resp.StatusCode == 200 {
+			return true, nil
+		}
+		return false, nil
+	}
+
+	if resp.StatusCode == 200 || resp.StatusCode == 409 {
+		// 记录日志
+		if response.TestedNodes != nil {
+			p.ext.Log().Info("批量节点检测完成",
+				zap.Int("count", len(nodes)),
+				zap.Int("tested", *response.TestedNodes),
+				zap.String("duration", response.Duration))
+		} else {
+			p.ext.Log().Info("批量节点添加成功", zap.Int("count", len(nodes)))
+		}
+		return true, &response
+	}
+
+	// 处理检测失败的情况
+	if resp.StatusCode == 400 && response.TestedNodes != nil {
+		p.ext.Log().Info("批量节点检测失败",
+			zap.Int("count", len(nodes)),
+			zap.Int("tested", *response.TestedNodes),
+			zap.String("duration", response.Duration))
+		return false, &response
+	}
+
+	// 其他错误
+	p.ext.Log().Info("批量节点提交失败", zap.String("error", response.Error))
+	return false, &response
+}
+
 // handleSubscriptionLinks 处理多个订阅/节点链接
 func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgbotapi.BotAPI, msg *tgbotapi.Message, links []string) {
 	// 发送处理中消息
@@ -415,32 +510,144 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 		return
 	}
 
-	responseMessages := make([]string, 0)
+	// 分组：订阅和节点
+	var subscriptions []string
+	var nodes []string
 
 	for _, link := range links {
-		isNode := p.IsProxyNode(link)
-		linkType := "订阅"
-		if isNode {
-			linkType = "节点"
-		}
-
-		p.ext.Log().Info(fmt.Sprintf("检测到%s: %s", linkType, link))
-
-		// 添加到 API，获取详细响应信息
-		success, responseMsg := p.addSubscriptionToAPI(link, isNode)
-
-		if success {
-			p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s", linkType, link))
+		if p.IsProxyNode(link) {
+			nodes = append(nodes, link)
 		} else {
-			p.ext.Log().Error(fmt.Sprintf("%s添加失败: %s - %s", linkType, link, responseMsg))
+			subscriptions = append(subscriptions, link)
 		}
-		
-		// 直接使用 API 返回的详细消息（包含检测统计信息）
-		responseMessages = append(responseMessages, responseMsg)
 	}
 
-	// 直接使用详细响应消息，不需要简单汇总
-	finalMsg := strings.Join(responseMessages, "\n\n")
+	// 合并结果统计
+	var allResponses []*SubscriptionResponse
+	var totalDurationSeconds float64
+
+	// 处理订阅（逐个提交）
+	for _, subLink := range subscriptions {
+		p.ext.Log().Info("检测到订阅: " + subLink)
+		success, responseMsg := p.addSubscriptionToAPI(subLink, false)
+
+		if success {
+			p.ext.Log().Info("订阅添加成功: " + subLink)
+		} else {
+			p.ext.Log().Error("订阅添加失败: " + subLink + " - " + responseMsg)
+		}
+
+		// 解析响应统计信息
+		if strings.Contains(responseMsg, "📊") {
+			var resp SubscriptionResponse
+			// 从消息中提取统计数据
+			lines := strings.Split(responseMsg, "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "📊 检测:") {
+					var tested int
+					fmt.Sscanf(line, "📊 检测: %d个节点", &tested)
+					resp.TestedNodes = &tested
+				} else if strings.Contains(line, "✅ 通过:") {
+					var passed int
+					fmt.Sscanf(line, "✅ 通过: %d个", &passed)
+					resp.PassedNodes = &passed
+				} else if strings.Contains(line, "❌ 失败:") {
+					var failed int
+					fmt.Sscanf(line, "❌ 失败: %d个", &failed)
+					resp.FailedNodes = &failed
+				} else if strings.Contains(line, "➕ 添加:") {
+					var added int
+					fmt.Sscanf(line, "➕ 添加: %d个", &added)
+					resp.AddedNodes = &added
+				} else if strings.Contains(line, "⏱") {
+					idx := strings.Index(line, ":")
+					if idx > 0 {
+						resp.Duration = strings.TrimSpace(line[idx+1:])
+						// 解析耗时（假设格式为 "1.23s" 或 "123ms"）
+						if strings.HasSuffix(resp.Duration, "s") {
+							var sec float64
+							fmt.Sscanf(resp.Duration, "%fs", &sec)
+							totalDurationSeconds += sec
+						} else if strings.HasSuffix(resp.Duration, "ms") {
+							var ms float64
+							fmt.Sscanf(resp.Duration, "%fms", &ms)
+							totalDurationSeconds += ms / 1000
+						}
+					}
+				}
+			}
+			if resp.TestedNodes != nil {
+				allResponses = append(allResponses, &resp)
+			}
+		}
+	}
+
+	// 处理节点（批量提交）
+	if len(nodes) > 0 {
+		p.ext.Log().Info(fmt.Sprintf("检测到%d个节点，准备批量提交", len(nodes)))
+		success, resp := p.addNodesBatchToAPI(nodes)
+
+		if success {
+			p.ext.Log().Info(fmt.Sprintf("批量节点添加成功: %d个", len(nodes)))
+		} else {
+			p.ext.Log().Error(fmt.Sprintf("批量节点添加失败: %d个", len(nodes)))
+		}
+
+		if resp != nil && resp.TestedNodes != nil {
+			allResponses = append(allResponses, resp)
+			// 解析耗时
+			if resp.Duration != "" {
+				if strings.HasSuffix(resp.Duration, "s") {
+					var sec float64
+					fmt.Sscanf(resp.Duration, "%fs", &sec)
+					totalDurationSeconds += sec
+				} else if strings.HasSuffix(resp.Duration, "ms") {
+					var ms float64
+					fmt.Sscanf(resp.Duration, "%fms", &ms)
+					totalDurationSeconds += ms / 1000
+				}
+			}
+		}
+	}
+
+	// 构造最终消息
+	var finalMsg string
+	if len(allResponses) > 0 {
+		// 合并统计数据
+		var totalStats struct {
+			TestedNodes int
+			PassedNodes int
+			FailedNodes int
+			AddedNodes  int
+		}
+
+		for _, resp := range allResponses {
+			if resp.TestedNodes != nil {
+				totalStats.TestedNodes += *resp.TestedNodes
+			}
+			if resp.PassedNodes != nil {
+				totalStats.PassedNodes += *resp.PassedNodes
+			}
+			if resp.FailedNodes != nil {
+				totalStats.FailedNodes += *resp.FailedNodes
+			}
+			if resp.AddedNodes != nil {
+				totalStats.AddedNodes += *resp.AddedNodes
+			}
+		}
+
+		// 生成汇总消息
+		finalMsg = "✅检测完成\n"
+		finalMsg += fmt.Sprintf("📊 检测: %d个节点\n", totalStats.TestedNodes)
+		finalMsg += fmt.Sprintf("✅ 通过: %d个\n", totalStats.PassedNodes)
+		finalMsg += fmt.Sprintf("❌ 失败: %d个\n", totalStats.FailedNodes)
+		finalMsg += fmt.Sprintf("➕ 添加: %d个\n", totalStats.AddedNodes)
+		if totalDurationSeconds > 0 {
+			finalMsg += fmt.Sprintf("⏱ 耗时: %.2fs", totalDurationSeconds)
+		}
+	} else {
+		finalMsg = "❌ 处理失败，未获取到有效响应"
+	}
 
 	// 更新状态消息
 	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, finalMsg)

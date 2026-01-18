@@ -164,7 +164,18 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 		return 0, 0, nil
 	}
 
-	// 发送到订阅 API
+	// 分组：订阅和节点
+	var subscriptions []string
+	var nodes []string
+
+	for _, link := range filteredLinks {
+		if p.IsProxyNode(link) {
+			nodes = append(nodes, link)
+		} else {
+			subscriptions = append(subscriptions, link)
+		}
+	}
+
 	subsCount := 0
 	nodeCount := 0
 
@@ -177,31 +188,151 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 	p.ext.Log().Debug("准备发送链接到API",
 		zap.Int("message_id", msg.ID),
 		zap.String("type", msgTypeLabel),
-		zap.Int("filtered_links_count", len(filteredLinks)))
+		zap.Int("subscriptions_count", len(subscriptions)),
+		zap.Int("nodes_count", len(nodes)))
 
-	for _, link := range filteredLinks {
-		p.ext.Log().Debug("调用addSubscription", zap.String("link", link))
-		if err := p.addSubscription(link); err != nil {
+	// 处理订阅（逐个调用addSubscription）
+	for _, subLink := range subscriptions {
+		p.ext.Log().Debug("调用addSubscription", zap.String("link", subLink))
+		if err := p.addSubscription(subLink); err != nil {
 			p.ext.Log().Info(fmt.Sprintf("%s-发送订阅失败", msgTypeLabel),
-				zap.String("link", link),
+				zap.String("link", subLink),
 				zap.Error(err))
 		} else {
-			linkType := "订阅"
-			if p.IsProxyNode(link) {
-				linkType = "节点"
-				nodeCount++
-			} else {
-				subsCount++
-			}
-			p.ext.Log().Info(fmt.Sprintf("%s-新%s", msgTypeLabel, linkType),
+			subsCount++
+			p.ext.Log().Info(fmt.Sprintf("%s-新订阅", msgTypeLabel),
 				zap.Int64("channel", peerID),
-				zap.String("link", link))
+				zap.String("link", subLink))
 
 			emoji := "✅"
 			if isEdited {
 				emoji = "🔄"
 			}
-			fmt.Printf("%s %s-新%s: %s (频道: %d)\n", emoji, msgTypeLabel, linkType, link, peerID)
+			fmt.Printf("%s %s-新订阅: %s (频道: %d)\n", emoji, msgTypeLabel, subLink, peerID)
+		}
+	}
+
+	// 处理节点（批量汇总提交）
+	if len(nodes) > 0 {
+		p.ext.Log().Info(fmt.Sprintf("开始批量提交 %d 个节点", len(nodes)))
+
+		if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
+			p.ext.Log().Warn("订阅 API 未配置或未启用")
+		} else {
+			apiURL := p.config.Monitor.SubscriptionAPI.AddURL
+
+			// 将多个节点用\n连接
+			batchSS := strings.Join(nodes, "\n")
+
+			type SubscriptionRequest struct {
+				SubURL string `json:"sub_url,omitempty"`
+				SS     string `json:"ss,omitempty"`
+				Test   bool   `json:"test"`
+			}
+
+			reqBody := SubscriptionRequest{
+				SS:   batchSS,
+				Test: true,
+			}
+
+			jsonData, err := json.Marshal(reqBody)
+			if err != nil {
+				p.ext.Log().Info("JSON 序列化失败", zap.Error(err))
+			} else {
+				req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+				if err != nil {
+					p.ext.Log().Info("创建请求失败", zap.Error(err))
+				} else {
+					req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
+					req.Header.Set("Content-Type", "application/json")
+
+					client := &http.Client{Timeout: 120 * time.Second}
+					resp, err := client.Do(req)
+					if err != nil {
+						p.ext.Log().Info("批量节点 API 请求失败", zap.Error(err))
+					} else {
+						defer resp.Body.Close()
+
+						body, err := io.ReadAll(resp.Body)
+						if err != nil {
+							p.ext.Log().Info("读取响应失败", zap.Error(err))
+						} else {
+							// 记录原始响应（用于调试）
+							p.ext.Log().Info("批量节点API 响应",
+								zap.Int("status", resp.StatusCode),
+								zap.String("body", string(body)))
+
+							type SubscriptionResponse struct {
+								Message     string `json:"message"`
+								Error       string `json:"error"`
+								SubURL      string `json:"sub_url"`
+								TestedNodes *int   `json:"tested_nodes,omitempty"`
+								PassedNodes *int   `json:"passed_nodes,omitempty"`
+								FailedNodes *int   `json:"failed_nodes,omitempty"`
+								AddedNodes  *int   `json:"added_nodes,omitempty"`
+								Duration    string `json:"duration,omitempty"`
+								Timeout     *bool  `json:"timeout,omitempty"`
+								Warning     string `json:"warning,omitempty"`
+							}
+
+							var response SubscriptionResponse
+							if err := json.Unmarshal(body, &response); err != nil {
+								p.ext.Log().Info("批量节点响应解析失败",
+									zap.Error(err),
+									zap.String("body", string(body)),
+									zap.Int("status", resp.StatusCode))
+								// 如果是 200 状态码但解析失败，可能是纯文本响应，视为成功
+								if resp.StatusCode == 200 {
+									nodeCount = len(nodes)
+									p.ext.Log().Info(msgTypeLabel+"批量节点添加成功", zap.Int("node_count", len(nodes)))
+								}
+							} else {
+								// 处理响应
+								if resp.StatusCode == 200 {
+									if response.TestedNodes != nil {
+										// 检测模式响应 - 记录简洁日志
+										p.ext.Log().Info(msgTypeLabel+"批量节点检测完成",
+											zap.Int("node_count", len(nodes)),
+											zap.Int("tested_nodes", *response.TestedNodes),
+											zap.Intp("passed_nodes", response.PassedNodes),
+											zap.Intp("failed_nodes", response.FailedNodes),
+											zap.Intp("added_nodes", response.AddedNodes),
+											zap.String("duration", response.Duration))
+										nodeCount = len(nodes)
+									} else {
+										// 普通模式响应
+										p.ext.Log().Info(msgTypeLabel+"批量节点添加成功",
+											zap.Int("node_count", len(nodes)))
+										nodeCount = len(nodes)
+									}
+									emoji := "✅"
+									if isEdited {
+										emoji = "🔄"
+									}
+									fmt.Printf("%s %s-批量节点: %d个 (频道: %d)\n", emoji, msgTypeLabel, len(nodes), peerID)
+								} else if resp.StatusCode == 409 {
+									p.ext.Log().Info(msgTypeLabel+"批量节点已存在",
+										zap.Int("node_count", len(nodes)))
+									nodeCount = len(nodes)
+									emoji := "⚠️"
+									if isEdited {
+										emoji = "🔄"
+									}
+									fmt.Printf("%s %s-批量节点已存在: %d个 (频道: %d)\n", emoji, msgTypeLabel, len(nodes), peerID)
+								} else {
+									errorMsg := response.Error
+									if errorMsg == "" {
+										errorMsg = response.Message
+									}
+									p.ext.Log().Info(msgTypeLabel+"批量节点提交失败",
+										zap.Int("node_count", len(nodes)),
+										zap.String("error", errorMsg))
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
