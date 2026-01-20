@@ -253,7 +253,7 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 		Mode:   mode,
 		Silent: false,
 		DryRun: false,
-		Single: !isFilePath, // 文件路径：批量模式，链接：单条模式
+		Single: true, // 使用单条模式，避免分组消息处理bug
 		Desc:   false,
 	}
 
@@ -301,7 +301,7 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 			Mode:   mode,
 			Silent: false,
 			DryRun: false,
-			Single: !isFilePath,
+			Single: true, // 使用单条模式，避免分组消息处理bug
 			Desc:   false,
 		}
 		client := p.ext.Client()
@@ -388,7 +388,7 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 		Mode:   mode,
 		Silent: false,
 		DryRun: false,
-		Single: !isFilePath,
+		Single: true, // 使用单条模式，避免分组消息处理bug
 		Desc:   false,
 	}
 
