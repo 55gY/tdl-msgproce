@@ -1556,14 +1556,40 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 		zap.Int64("size", written))
 	
 	// 更新状态 - 开始验证
-	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-		fmt.Sprintf("✅ 文件下载成功\n\n🔍 正在验证消息ID...\n文件: %s\n大小: %.2f MB\n转发目标: %d",
+	verifyStatusMsg := fmt.Sprintf("✅ 文件下载成功\n\n🔍 正在验证消息ID...\n文件: %s\n大小: %.2f MB\n转发目标: %d",
+		doc.FileName,
+		float64(written)/(1024*1024),
+		forwardTarget)
+	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, verifyStatusMsg)
+	
+	// 进度更新回调
+	lastProgressUpdate := time.Now()
+	onProgress := func(total, validating, valid, invalid int) {
+		// 限制更新频率（最多每1秒更新一次）
+		if time.Since(lastProgressUpdate) < 1*time.Second && validating < total {
+			return
+		}
+		lastProgressUpdate = time.Now()
+		
+		progressMsg := fmt.Sprintf("✅ 文件下载成功\n\n🔍 正在验证消息ID...\n"+
+			"文件: %s\n大小: %.2f MB\n转发目标: %d\n\n"+
+			"📊 验证进度:\n"+
+			"总消息ID数: %d\n"+
+			"正在验证: %d/%d (%.1f%%)\n"+
+			"✅ 验证成功: %d\n"+
+			"❌ 验证失败: %d",
 			doc.FileName,
 			float64(written)/(1024*1024),
-			forwardTarget))
+			forwardTarget,
+			total,
+			validating, total, float64(validating)*100/float64(total),
+			valid,
+			invalid)
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, progressMsg)
+	}
 	
-	// 验证并清理JSON
-	result, err := p.VerifyJSONMessages(ctx, tmpFilePath)
+	// 验证并清理JSON（传入进度回调）
+	result, err := p.VerifyJSONMessages(ctx, tmpFilePath, onProgress)
 	if err != nil {
 		p.ext.Log().Error("验证JSON失败", zap.Error(err))
 		os.Remove(tmpFilePath)

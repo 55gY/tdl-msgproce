@@ -38,7 +38,7 @@ type VerifyResult struct {
 }
 
 // VerifyJSONMessages 验证JSON文件中的消息ID是否有效
-func (p *MessageProcessor) VerifyJSONMessages(ctx context.Context, jsonFile string) (*VerifyResult, error) {
+func (p *MessageProcessor) VerifyJSONMessages(ctx context.Context, jsonFile string, onProgress func(total, validating, valid, invalid int)) (*VerifyResult, error) {
 	p.ext.Log().Info("开始验证JSON文件", zap.String("file", jsonFile))
 
 	// 读取JSON文件
@@ -166,18 +166,14 @@ func (p *MessageProcessor) VerifyJSONMessages(ctx context.Context, jsonFile stri
 
 	// 收集结果（带进度显示）
 	processed := 0
-	lastProgress := 0
+	validCount := 0
+	invalidCount := 0
+	lastUpdate := time.Now()
 	for res := range results {
 		processed++
 		
-		// 显示进度（每10%）
-		progress := processed * 100 / len(messageIDs)
-		if progress >= lastProgress+10 {
-			fmt.Printf("验证进度: %d%% (%d/%d)\n", progress, processed, len(messageIDs))
-			lastProgress = progress
-		}
-
 		if !res.isValid {
+			invalidCount++
 			result.InvalidMessages++
 			result.InvalidIDs = append(result.InvalidIDs, res.msgID)
 			
@@ -192,7 +188,14 @@ func (p *MessageProcessor) VerifyJSONMessages(ctx context.Context, jsonFile stri
 					zap.String("error", res.errMessage))
 			}
 		} else {
+			validCount++
 			result.ValidMessages++
+		}
+		
+		// 实时更新进度（每0.5秒或每处理100条消息）
+		if onProgress != nil && (time.Since(lastUpdate) > 500*time.Millisecond || processed%100 == 0 || processed == len(messageIDs)) {
+			onProgress(len(messageIDs), processed, validCount, invalidCount)
+			lastUpdate = time.Now()
 		}
 	}
 
