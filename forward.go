@@ -279,6 +279,9 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link string, target int64, onProgress func(int, string)) error {
 	p.ext.Log().Info("开始转发到指定目标", zap.String("link", link), zap.Int64("target", target))
 
+	// 判断是否是文件路径（批量转发）
+	isFilePath := strings.HasSuffix(link, ".json")
+
 	if onProgress == nil {
 		// 如果没有进度回调，直接执行
 		kvd := newMemoryStorage()
@@ -291,8 +294,6 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 		default:
 			mode = forwarder.ModeClone
 		}
-		
-		isFilePath := strings.HasSuffix(link, ".json")
 		
 		opts := forward.Options{
 			From:   []string{link},
@@ -328,16 +329,40 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 	// 启动goroutine读取输出并解析进度
 	done := make(chan bool, 2)
 
+	// 消息计数器（用于文件转发验证）
+	var messageCount int64
+	var messageMutex sync.Mutex
+	onMessageSent := func(line string) {
+		messageMutex.Lock()
+		messageCount++
+		messageMutex.Unlock()
+		p.ext.Log().Debug("消息转发", zap.String("line", line), zap.Int64("count", messageCount))
+	}
+
 	// 读取 stdout
 	go func() {
-		pw := newProgressWriter(oldStdout, onProgress)
+		var pw *progressWriter
+		if isFilePath {
+			// 文件转发：添加消息计数
+			pw = newProgressWriterWithMessageCounter(oldStdout, onProgress, onMessageSent)
+		} else {
+			// 单链接转发：仅进度回调
+			pw = newProgressWriter(oldStdout, onProgress)
+		}
 		io.Copy(pw, rOut)
 		done <- true
 	}()
 
 	// 读取 stderr
 	go func() {
-		pw := newProgressWriter(oldStderr, onProgress)
+		var pw *progressWriter
+		if isFilePath {
+			// 文件转发：添加消息计数
+			pw = newProgressWriterWithMessageCounter(oldStderr, onProgress, onMessageSent)
+		} else {
+			// 单链接转发：仅进度回调
+			pw = newProgressWriter(oldStderr, onProgress)
+		}
 		io.Copy(pw, rErr)
 		done <- true
 	}()
