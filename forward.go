@@ -253,7 +253,7 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 		Mode:   mode,
 		Silent: false,
 		DryRun: false,
-		Single: true, // 使用单条模式，避免分组消息处理bug
+		Single: true, // 使用单条模式
 		Desc:   false,
 	}
 
@@ -301,7 +301,7 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 			Mode:   mode,
 			Silent: false,
 			DryRun: false,
-			Single: true, // 使用单条模式，避免分组消息处理bug
+			Single: true,
 			Desc:   false,
 		}
 		client := p.ext.Client()
@@ -388,7 +388,7 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 		Mode:   mode,
 		Silent: false,
 		DryRun: false,
-		Single: true, // 使用单条模式，避免分组消息处理bug
+		Single: true,
 		Desc:   false,
 	}
 
