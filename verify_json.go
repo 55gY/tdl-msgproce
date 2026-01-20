@@ -263,10 +263,17 @@ func (p *MessageProcessor) CreateCleanedJSON(originalFile string, outputFile str
 func (p *MessageProcessor) VerifyAndFixJSON(ctx context.Context, jsonFile string) error {
 	fmt.Println("🔍 开始验证JSON文件...")
 	
-	result, err := p.VerifyJSONMessages(ctx, jsonFile)
+	// 进度更新回调（控制台输出）
+	onProgress := func(total, validating, valid, invalid int) {
+		fmt.Printf("\r验证进度: %d/%d (%.1f%%) | ✅ 成功: %d | ❌ 失败: %d", 
+			validating, total, float64(validating)*100/float64(total), valid, invalid)
+	}
+	
+	result, err := p.VerifyJSONMessages(ctx, jsonFile, onProgress)
 	if err != nil {
 		return fmt.Errorf("验证失败: %w", err)
 	}
+	fmt.Println() // 换行
 
 	// 打印结果
 	fmt.Println("\n📊 验证结果:")
