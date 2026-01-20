@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gotd/td/telegram/peers"
-	"github.com/gotd/td/tg"
 	"github.com/iyear/tdl/core/storage"
 	"github.com/iyear/tdl/core/util/tutil"
 	"go.uber.org/zap"
@@ -81,8 +80,9 @@ func (p *MessageProcessor) VerifyJSONMessages(ctx context.Context, jsonFile stri
 
 	// 获取频道/群组信息
 	client := p.ext.Client()
+	api := client.API()
 	kvd := newMemoryStorage()
-	manager := peers.Options{Storage: storage.NewPeers(kvd)}.Build(client)
+	manager := peers.Options{Storage: storage.NewPeers(kvd)}.Build(api)
 
 	peer, err := tutil.GetInputPeer(ctx, manager, fmt.Sprintf("%d", export.ID))
 	if err != nil {
@@ -114,7 +114,7 @@ func (p *MessageProcessor) VerifyJSONMessages(ctx context.Context, jsonFile stri
 			defer wg.Done()
 			for job := range jobs {
 				// 尝试获取消息
-				msg, err := tutil.GetSingleMessage(ctx, client, peer.InputPeer(), job.msgID)
+				msg, err := tutil.GetSingleMessage(ctx, api, peer.InputPeer(), job.msgID)
 				if err != nil {
 					results <- struct {
 						index      int
