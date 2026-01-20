@@ -200,14 +200,17 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 		mode = forwarder.ModeClone
 	}
 
+	// 判断是否是文件路径（批量转发）
+	isFilePath := strings.HasSuffix(link, ".json")
+
 	// 准备 forward 选项
 	opts := forward.Options{
-		From:   []string{link}, // 从链接转发
+		From:   []string{link}, // 从链接或文件路径转发
 		To:     fmt.Sprintf("%d", p.config.Bot.ForwardTarget),
 		Mode:   mode,
 		Silent: false,
 		DryRun: false,
-		Single: true, // 单条消息模式
+		Single: !isFilePath, // 文件路径：批量模式，链接：单条模式
 		Desc:   false,
 	}
 
@@ -226,5 +229,118 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 	}
 
 	p.ext.Log().Info("转发成功", zap.String("link", link))
+	return nil
+}
+
+// forwardFromLinkWithTarget 使用 tdl 的 forward 功能转发消息到指定目标
+func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link string, target int64, onProgress func(int, string)) error {
+	p.ext.Log().Info("开始转发到指定目标", zap.String("link", link), zap.Int64("target", target))
+
+	if onProgress == nil {
+		// 如果没有进度回调，直接执行
+		kvd := newMemoryStorage()
+		var mode forwarder.Mode
+		switch p.config.Bot.ForwardMode {
+		case "clone":
+			mode = forwarder.ModeClone
+		case "direct":
+			mode = forwarder.ModeDirect
+		default:
+			mode = forwarder.ModeClone
+		}
+		
+		isFilePath := strings.HasSuffix(link, ".json")
+		
+		opts := forward.Options{
+			From:   []string{link},
+			To:     fmt.Sprintf("%d", target),
+			Mode:   mode,
+			Silent: false,
+			DryRun: false,
+			Single: !isFilePath,
+			Desc:   false,
+		}
+		client := p.ext.Client()
+		if err := forward.Run(ctx, client, kvd, opts); err != nil {
+			return fmt.Errorf("转发失败: %w", err)
+		}
+		p.ext.Log().Info("转发成功", zap.String("link", link), zap.Int64("target", target))
+		return nil
+	}
+
+	// 保存原始 stdout 和 stderr
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	defer func() {
+		os.Stdout = oldStdout
+		os.Stderr = oldStderr
+	}()
+
+	// 创建管道捕获输出
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	// 启动goroutine读取输出并解析进度
+	done := make(chan bool, 2)
+
+	// 读取 stdout
+	go func() {
+		pw := newProgressWriter(oldStdout, onProgress)
+		io.Copy(pw, rOut)
+		done <- true
+	}()
+
+	// 读取 stderr
+	go func() {
+		pw := newProgressWriter(oldStderr, onProgress)
+		io.Copy(pw, rErr)
+		done <- true
+	}()
+
+	// 使用内存存储
+	kvd := newMemoryStorage()
+
+	// 转换 forward mode
+	var mode forwarder.Mode
+	switch p.config.Bot.ForwardMode {
+	case "clone":
+		mode = forwarder.ModeClone
+	case "direct":
+		mode = forwarder.ModeDirect
+	default:
+		mode = forwarder.ModeClone
+	}
+
+	// 判断是否是文件路径（批量转发）
+	isFilePath := strings.HasSuffix(link, ".json")
+
+	// 准备 forward 选项（使用自定义目标）
+	opts := forward.Options{
+		From:   []string{link},
+		To:     fmt.Sprintf("%d", target),
+		Mode:   mode,
+		Silent: false,
+		DryRun: false,
+		Single: !isFilePath,
+		Desc:   false,
+	}
+
+	// 调用 tdl 的 forward 功能
+	client := p.ext.Client()
+	err := forward.Run(ctx, client, kvd, opts)
+
+	// 关闭写入端，等待读取完成
+	wOut.Close()
+	wErr.Close()
+	<-done
+	<-done
+
+	if err != nil {
+		return fmt.Errorf("转发失败: %w", err)
+	}
+
+	p.ext.Log().Info("转发成功", zap.String("link", link), zap.Int64("target", target))
 	return nil
 }

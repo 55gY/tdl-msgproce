@@ -178,6 +178,12 @@ func (p *MessageProcessor) StartTelegramBot(ctx context.Context) error {
 				continue
 			}
 
+			// 处理文档文件（JSON 文件）
+			if update.Message.Document != nil {
+				go p.handleDocumentMessage(ctx, bot, taskManager, update.Message)
+				continue
+			}
+
 			// 处理消息
 			go p.handleBotMessage(ctx, bot, taskManager, update.Message)
 		}
@@ -208,12 +214,15 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 			"👋 欢迎使用 tdl-msgproce Bot！\n\n"+
 				"📌 功能：\n"+
 				"• 发送 Telegram 链接进行转发\n"+
+				"• 直接发送 JSON 文件进行批量转发\n"+
 				"• 发送订阅链接添加到监听\n\n"+
 				"🔗 支持格式:\n"+
 				"• https://t.me/channel/123\n"+
 				"• @channel_username\n"+
+				"• 📄 目标ID.json (文件名=转发目标)\n"+
 				"• 订阅链接 (http/https)\n"+
-				"• 多个链接（空格或换行分隔）")
+				"• 多个链接（空格或换行分隔）\n\n"+
+				"💡 提示：文件名即为转发目标ID")
 		return
 	}
 
@@ -221,9 +230,11 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
 			"📖 使用帮助:\n\n"+
 				"1️⃣ 转发消息\n"+
+				"   • 🔥 直接发送 JSON 文件（文件名=目标ID）\n"+
+				"   • 例如：123456789.json 转发到 123456789\n"+
 				"   • 发送 Telegram 链接进行转发\n"+
 				"   • 支持批量转发（一次发送多个链接）\n"+
-				fmt.Sprintf("   • 转发目标: %d\n", p.config.Bot.ForwardTarget)+
+				fmt.Sprintf("   • 默认目标: %d\n", p.config.Bot.ForwardTarget)+
 				fmt.Sprintf("   • 转发模式: %s\n\n", p.config.Bot.ForwardMode)+
 				"2️⃣ 添加订阅\n"+
 				"   • 发送订阅链接 (http/https 格式)\n"+
@@ -232,7 +243,8 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 				"   • /ss config - 查看 SS 配置\n"+
 				"   • /ss auto - 自动安装/重置 SS\n\n"+
 				"4️⃣ 查看状态\n"+
-				"   • 使用 /status 查看运行状态")
+				"   • 使用 /status 查看运行状态\n\n"+
+				"💡 提示：文件名即为转发目标，无需配置！")
 		return
 	}
 
@@ -328,7 +340,8 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 				"请发送以下格式:\n"+
 				"• Telegram 链接: https://t.me/channel/123\n"+
 				"• 频道用户名: @channel_username\n"+
-				"• 订阅链接: http/https 格式")
+				"• 订阅链接: http/https 格式\n\n"+
+				"💡 批量转发请直接发送 JSON 文件")
 		return
 	}
 
@@ -937,9 +950,11 @@ func (p *MessageProcessor) buildBatchStatusText(batchID int, tasks []*ForwardTas
 
 	// 计算当前进度（哪个任务正在运行）
 	var currentTaskIndex int
+	var runningTask *ForwardTask
 	for idx, t := range tasks {
 		if t.Status == "running" {
 			currentTaskIndex = idx + 1
+			runningTask = t
 			break
 		}
 	}
@@ -953,6 +968,14 @@ func (p *MessageProcessor) buildBatchStatusText(batchID int, tasks []*ForwardTas
 	for _, task := range tasks {
 		var statusIcon string
 		var statusText string
+		var taskType string
+
+		// 判断任务类型
+		if strings.HasSuffix(task.Link, ".json") {
+			taskType = "📁"
+		} else {
+			taskType = "🔗"
+		}
 
 		switch task.Status {
 		case "pending":
@@ -979,10 +1002,165 @@ func (p *MessageProcessor) buildBatchStatusText(batchID int, tasks []*ForwardTas
 			statusText = "未知"
 		}
 
-		sb.WriteString(fmt.Sprintf("%s #%d [%s] %s\n", statusIcon, task.ID, statusText, task.Link))
+		// 显示任务信息，文件路径只显示文件名
+		displayLink := task.Link
+		if strings.HasSuffix(task.Link, ".json") {
+			// 提取文件名
+			parts := strings.Split(task.Link, "/")
+			if len(parts) > 0 {
+				displayLink = parts[len(parts)-1]
+			}
+			// 如果是 Windows 路径
+			parts = strings.Split(displayLink, "\\")
+			if len(parts) > 0 {
+				displayLink = parts[len(parts)-1]
+			}
+		}
+
+		sb.WriteString(fmt.Sprintf("%s %s #%d [%s] %s\n", statusIcon, taskType, task.ID, statusText, displayLink))
+	}
+
+	// 如果有正在运行的文件任务，添加额外提示
+	if runningTask != nil && strings.HasSuffix(runningTask.Link, ".json") {
+		sb.WriteString("\n💡 大规模迁移进行中，请保持耐心...")
 	}
 
 	return sb.String()
+}
+
+// executeBatchTasksWithTarget 执行批量转发任务（带自定义目标）
+func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot *tgbotapi.BotAPI, taskManager *TaskManager, batch *BatchTask, customTarget int64) {
+	defer taskManager.RemoveBatch(batch.UserID, batch.BatchID)
+
+	// 创建取消按钮
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🛑 终止所有任务", fmt.Sprintf("cancel_batch_%d_%d", batch.UserID, batch.BatchID)),
+		),
+	)
+
+	// 逐个执行任务
+	for i, task := range batch.Tasks {
+		// 检查是否已取消
+		task.CancelMutex.Lock()
+		if task.Cancelled {
+			task.CancelMutex.Unlock()
+			break
+		}
+		task.CancelMutex.Unlock()
+
+		// 更新任务状态为运行中
+		task.Status = "running"
+		task.Progress = 0
+		statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)
+		p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
+
+		// 判断是否是文件任务（需要更长的更新间隔）
+		isFileTask := strings.HasSuffix(task.Link, ".json")
+		updateInterval := 1 * time.Second
+		if isFileTask {
+			// 文件任务使用更长的更新间隔，避免 Telegram API 限制
+			updateInterval = 30 * time.Second
+		}
+
+		// 进度更新回调
+		lastUpdate := time.Now()
+		lastPercent := -1
+		onProgress := func(percent int, line string) {
+			p.ext.Log().Info("进度回调", zap.Int("percent", percent), zap.String("line", line))
+			task.Progress = percent
+
+			// 只在进度变化时保存新行（避免重复）
+			if percent != lastPercent {
+				task.ProgressMutex.Lock()
+				task.ProgressLines = append(task.ProgressLines, fmt.Sprintf("%d%% - %s", percent, line))
+				if len(task.ProgressLines) > 5 {
+					task.ProgressLines = task.ProgressLines[len(task.ProgressLines)-5:]
+				}
+				task.ProgressMutex.Unlock()
+				lastPercent = percent
+			}
+
+			// 限制更新频率，根据任务类型使用不同间隔
+			if time.Since(lastUpdate) > updateInterval {
+				lastUpdate = time.Now()
+				p.ext.Log().Info("更新Bot消息", zap.Int("taskID", task.ID), zap.Int("percent", percent))
+				statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)
+				p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
+			}
+		}
+
+		// 执行转发（传入进度回调和自定义目标）
+		err := p.forwardFromLinkWithTarget(ctx, task.Link, customTarget, onProgress)
+
+		// 检查context是否被取消
+		if ctx.Err() == context.Canceled {
+			task.Status = "cancelled"
+			task.Error = "用户终止"
+		} else if err != nil {
+			task.Status = "failed"
+			task.Error = err.Error()
+			p.ext.Log().Info("转发失败", zap.Int("taskID", task.ID), zap.String("link", task.Link), zap.Error(err))
+		} else {
+			task.Status = "completed"
+			p.forwardCount++
+			p.ext.Log().Info("转发成功", zap.Int("taskID", task.ID), zap.String("link", task.Link))
+		}
+
+		// 更新状态显示
+		statusText = p.buildBatchStatusText(batch.BatchID, batch.Tasks)
+
+		// 如果是最后一个任务或有任务失败/取消，移除按钮
+		if i == len(batch.Tasks)-1 || task.Status == "cancelled" {
+			p.updateBotMessage(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText)
+		} else {
+			p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
+		}
+
+		// 如果任务被取消，停止执行剩余任务
+		if task.Status == "cancelled" {
+			// 标记剩余任务为已取消
+			for j := i + 1; j < len(batch.Tasks); j++ {
+				batch.Tasks[j].Status = "cancelled"
+				batch.Tasks[j].Error = "批次已终止"
+			}
+			break
+		}
+
+		// 任务间隔（避免频繁操作）
+		if i < len(batch.Tasks)-1 {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+	// 最终状态统计
+	var completed, failed, cancelled int
+	for _, task := range batch.Tasks {
+		switch task.Status {
+		case "completed":
+			completed++
+		case "failed":
+			failed++
+		case "cancelled":
+			cancelled++
+		}
+	}
+
+	finalText := fmt.Sprintf("📦 批次 #%d 已完成\n\n"+
+		"总计: %d个任务\n"+
+		"✅ 成功: %d\n"+
+		"⚠️ 失败: %d\n"+
+		"❌ 取消: %d\n\n"+
+		"耗时: %v",
+		batch.BatchID,
+		len(batch.Tasks),
+		completed,
+		failed,
+		cancelled,
+		time.Since(batch.StartTime).Round(time.Second),
+	)
+
+	p.updateBotMessage(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, finalText)
 }
 
 // executeBatchTasks 执行批量转发任务
@@ -1012,6 +1190,14 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)
 		p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
 
+		// 判断是否是文件任务（需要更长的更新间隔）
+		isFileTask := strings.HasSuffix(task.Link, ".json")
+		updateInterval := 1 * time.Second
+		if isFileTask {
+			// 文件任务使用更长的更新间隔，避免 Telegram API 限制
+			updateInterval = 30 * time.Second
+		}
+
 		// 进度更新回调
 		lastUpdate := time.Now()
 		lastPercent := -1
@@ -1030,8 +1216,8 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 				lastPercent = percent
 			}
 
-			// 限制更新频率，避免过于频繁
-			if time.Since(lastUpdate) > 1*time.Second {
+			// 限制更新频率，根据任务类型使用不同间隔
+			if time.Since(lastUpdate) > updateInterval {
 				lastUpdate = time.Now()
 				p.ext.Log().Info("更新Bot消息", zap.Int("taskID", task.ID), zap.Int("percent", percent))
 				statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)
@@ -1273,4 +1459,180 @@ func (p *MessageProcessor) executeSSCommand(ctx context.Context, subCmd string) 
 	}
 
 	return output, nil
+}
+
+// handleDocumentMessage 处理文档文件消息
+func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbotapi.BotAPI, taskManager *TaskManager, msg *tgbotapi.Message) {
+	doc := msg.Document
+	
+	// 检查文件类型
+	if !strings.HasSuffix(doc.FileName, ".json") {
+		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+			"❌ 仅支持 .json 文件\n\n"+
+				"请发送格式：目标ID.json\n"+
+				"例如：123456789.json")
+		return
+	}
+	
+	// 从文件名提取转发目标 ID
+	fileNameWithoutExt := strings.TrimSuffix(doc.FileName, ".json")
+	var forwardTarget int64
+	if _, err := fmt.Sscanf(fileNameWithoutExt, "%d", &forwardTarget); err != nil {
+		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+			"❌ 文件名格式错误\n\n"+
+				"文件名必须是目标ID\n"+
+				"例如：123456789.json\n\n"+
+				"当前文件名："+doc.FileName)
+		return
+	}
+	
+	// 检查文件大小（限制 100MB）
+	if doc.FileSize > 100*1024*1024 {
+		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+			"❌ 文件过大\n\n"+
+				fmt.Sprintf("文件大小: %.2f MB\n", float64(doc.FileSize)/(1024*1024))+
+				"最大限制: 100 MB")
+		return
+	}
+	
+	p.ext.Log().Info("收到文档文件",
+		zap.String("fileName", doc.FileName),
+		zap.Int("fileSize", doc.FileSize),
+		zap.Int64("userID", msg.From.ID),
+		zap.Int64("forwardTarget", forwardTarget))
+	
+	// 发送下载中提示
+	statusMsg := p.sendBotMessage(bot, msg.Chat.ID,
+		fmt.Sprintf("📥 正在下载文件: %s\n文件大小: %.2f MB\n转发目标: %d\n\n请稍候...",
+			doc.FileName,
+			float64(doc.FileSize)/(1024*1024),
+			forwardTarget))
+	
+	// 获取文件下载链接
+	fileConfig := tgbotapi.FileConfig{FileID: doc.FileID}
+	file, err := bot.GetFile(fileConfig)
+	if err != nil {
+		p.ext.Log().Error("获取文件失败", zap.Error(err))
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
+			"❌ 获取文件失败: "+err.Error())
+		return
+	}
+	
+	// 使用当前目录，文件名保持不变
+	tmpFilePath := doc.FileName
+	
+	// 下载文件
+	fileURL := file.Link(bot.Token)
+	resp, err := http.Get(fileURL)
+	if err != nil {
+		p.ext.Log().Error("下载文件失败", zap.Error(err))
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
+			"❌ 下载文件失败: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	
+	// 保存文件
+	outFile, err := os.Create(tmpFilePath)
+	if err != nil {
+		p.ext.Log().Error("创建文件失败", zap.Error(err))
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
+			"❌ 创建文件失败: "+err.Error())
+		return
+	}
+	
+	written, err := io.Copy(outFile, resp.Body)
+	outFile.Close()
+	if err != nil {
+		p.ext.Log().Error("保存文件失败", zap.Error(err))
+		os.Remove(tmpFilePath)
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
+			"❌ 保存文件失败: "+err.Error())
+		return
+	}
+	
+	p.ext.Log().Info("文件下载成功",
+		zap.String("filePath", tmpFilePath),
+		zap.Int64("size", written))
+	
+	// 更新状态为准备转发
+	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
+		fmt.Sprintf("✅ 文件下载成功\n文件: %s\n大小: %.2f MB\n转发目标: %d\n\n准备开始转发...",
+			doc.FileName,
+			float64(written)/(1024*1024),
+			forwardTarget))
+	
+	time.Sleep(2 * time.Second)
+	
+	// 创建转发任务（使用下载的文件路径和提取的目标ID）
+	batchID := taskManager.GetNextBatchID(msg.From.ID)
+	taskID := taskManager.GetNextTaskID(msg.From.ID)
+	
+	task := &ForwardTask{
+		ID:        taskID,
+		Link:      tmpFilePath, // 使用文件路径
+		UserID:    msg.From.ID,
+		Status:    "pending",
+		Cancelled: false,
+	}
+	
+	tasks := []*ForwardTask{task}
+	
+	// 发送警告提示
+	p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+		"⚠️ 批量转发任务\n\n"+
+			"📌 注意事项：\n"+
+			"• 大规模迁移可能需要数小时甚至数天\n"+
+			"• 程序无超时限制，会持续运行直到完成\n"+
+			"• 可随时点击按钮终止任务\n"+
+			"• 建议保持程序稳定运行\n"+
+			"• Bot 会定期更新进度（每30秒）\n"+
+			"• 任务完成后将自动删除文件\n\n"+
+			"即将开始执行...")
+	time.Sleep(3 * time.Second)
+	
+	// 创建取消按钮
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🛑 终止所有任务", fmt.Sprintf("cancel_batch_%d_%d", msg.From.ID, batchID)),
+		),
+	)
+	
+	// 发送汇总状态消息
+	statusText := p.buildBatchStatusText(batchID, tasks)
+	batchStatusMsg := p.sendBotMessageWithKeyboard(bot, msg.Chat.ID, statusText, keyboard)
+	if batchStatusMsg == nil {
+		os.Remove(tmpFilePath) // 清理文件
+		return
+	}
+	
+	// 创建可取消的 context
+	batchCtx, cancel := context.WithCancel(ctx)
+	
+	// 创建批量任务
+	batch := &BatchTask{
+		BatchID:   batchID,
+		UserID:    msg.From.ID,
+		Tasks:     tasks,
+		StatusMsg: batchStatusMsg,
+		Cancel:    cancel,
+		StartTime: time.Now(),
+	}
+	
+	// 添加到任务管理器
+	taskManager.AddBatch(batch)
+	
+	// 异步执行批量转发（使用自定义转发目标）
+	go func() {
+		p.executeBatchTasksWithTarget(batchCtx, bot, taskManager, batch, forwardTarget)
+		// 任务完成后删除文件
+		time.Sleep(2 * time.Second) // 等待最后的状态更新
+		if err := os.Remove(tmpFilePath); err != nil {
+			p.ext.Log().Warn("删除文件失败",
+				zap.String("filePath", tmpFilePath),
+				zap.Error(err))
+		} else {
+			p.ext.Log().Info("文件已删除", zap.String("filePath", tmpFilePath))
+		}
+	}()
 }
