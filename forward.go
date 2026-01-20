@@ -63,9 +63,11 @@ func cleanANSI(s string) string {
 
 // progressWriter 捕获tdl输出并解析进度
 type progressWriter struct {
-	original       io.Writer
-	progressRegexp *regexp.Regexp
-	onProgress     func(percent int, line string)
+	original        io.Writer
+	progressRegexp  *regexp.Regexp
+	messageRegexp   *regexp.Regexp // 匹配批量模式消息格式
+	onProgress      func(percent int, line string)
+	onMessageSent   func(line string) // 消息发送回调
 }
 
 func newProgressWriter(original io.Writer, onProgress func(percent int, line string)) *progressWriter {
@@ -76,8 +78,15 @@ func newProgressWriter(original io.Writer, onProgress func(percent int, line str
 	return &progressWriter{
 		original:       original,
 		progressRegexp: regexp.MustCompile(`(\d+\.\d+)%`),
+		messageRegexp:  regexp.MustCompile(`\([0-9]+\):[0-9]+ -> `), // 匹配 (channelID):msgID -> 
 		onProgress:     onProgress,
 	}
+}
+
+func newProgressWriterWithMessageCounter(original io.Writer, onProgress func(percent int, line string), onMessageSent func(line string)) *progressWriter {
+	pw := newProgressWriter(original, onProgress)
+	pw.onMessageSent = onMessageSent
+	return pw
 }
 
 func (pw *progressWriter) Write(p []byte) (n int, err error) {
@@ -112,6 +121,16 @@ func (pw *progressWriter) Write(p []byte) (n int, err error) {
 					pw.onProgress(roundedPercent, cleanLine)
 				}
 			}
+		}
+	}
+
+	// 识别批量模式消息格式: 源(ID):msgID -> 目标(ID)
+	if pw.onMessageSent != nil && pw.messageRegexp != nil {
+		line := string(p)
+		if pw.messageRegexp.MatchString(line) {
+			cleanLine := cleanANSI(line)
+			cleanLine = strings.TrimSpace(cleanLine)
+			pw.onMessageSent(cleanLine)
 		}
 	}
 
@@ -169,19 +188,46 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 	os.Stdout = wOut
 	os.Stderr = wErr
 
+	// 判断是否是文件路径（批量转发）
+	isFilePath := strings.HasSuffix(link, ".json")
+
 	// 启动goroutine读取输出并解析进度
 	done := make(chan bool, 2)
 
+	// 消息计数器（用于文件转发验证）
+	var messageCount int64
+	var messageMutex sync.Mutex
+	onMessageSent := func(line string) {
+		messageMutex.Lock()
+		messageCount++
+		messageMutex.Unlock()
+		p.ext.Log().Debug("消息转发", zap.String("line", line), zap.Int64("count", messageCount))
+	}
+
 	// 读取 stdout
 	go func() {
-		pw := newProgressWriter(oldStdout, onProgress)
+		var pw *progressWriter
+		if isFilePath {
+			// 文件转发：添加消息计数
+			pw = newProgressWriterWithMessageCounter(oldStdout, onProgress, onMessageSent)
+		} else {
+			// 单链接转发：仅进度回调
+			pw = newProgressWriter(oldStdout, onProgress)
+		}
 		io.Copy(pw, rOut)
 		done <- true
 	}()
 
 	// 读取 stderr
 	go func() {
-		pw := newProgressWriter(oldStderr, onProgress)
+		var pw *progressWriter
+		if isFilePath {
+			// 文件转发：添加消息计数
+			pw = newProgressWriterWithMessageCounter(oldStderr, onProgress, onMessageSent)
+		} else {
+			// 单链接转发：仅进度回调
+			pw = newProgressWriter(oldStderr, onProgress)
+		}
 		io.Copy(pw, rErr)
 		done <- true
 	}()
@@ -199,9 +245,6 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 	default:
 		mode = forwarder.ModeClone
 	}
-
-	// 判断是否是文件路径（批量转发）
-	isFilePath := strings.HasSuffix(link, ".json")
 
 	// 准备 forward 选项
 	opts := forward.Options{
@@ -313,9 +356,6 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 		mode = forwarder.ModeClone
 	}
 
-	// 判断是否是文件路径（批量转发）
-	isFilePath := strings.HasSuffix(link, ".json")
-
 	// 准备 forward 选项（使用自定义目标）
 	opts := forward.Options{
 		From:   []string{link},
@@ -341,6 +381,20 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 		return fmt.Errorf("转发失败: %w", err)
 	}
 
-	p.ext.Log().Info("转发成功", zap.String("link", link), zap.Int64("target", target))
+	// 验证文件转发结果
+	if isFilePath {
+		messageMutex.Lock()
+		finalCount := messageCount
+		messageMutex.Unlock()
+
+		if finalCount == 0 {
+			return fmt.Errorf("转发失败: 未检测到任何消息被转发，请检查文件内容或日志")
+		}
+
+		p.ext.Log().Info("转发成功", zap.String("link", link), zap.Int64("target", target), zap.Int64("messageCount", finalCount))
+	} else {
+		p.ext.Log().Info("转发成功", zap.String("link", link), zap.Int64("target", target))
+	}
+
 	return nil
 }
