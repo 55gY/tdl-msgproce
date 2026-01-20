@@ -367,13 +367,20 @@ install_tdl() {
         echo ""
         echo -e "${GREEN}✅ tdl 安装成功${NC}"
         echo ""
-        echo -e "${YELLOW}下一步：登录 Telegram 账号${NC}"
-        echo "运行: $TDL_PATH login -n default -T qr"
-        echo ""
-        echo -n "是否现在登录? (y/n): "
-        read -r answer
-        if [ "$answer" = "y" ]; then
-            $TDL_PATH login -n default -T qr
+        
+        # 检测登录状态
+        if check_tdl_login; then
+            echo -e "${GREEN}✅ 检测到已登录${NC}"
+        else
+            echo -e "${YELLOW}检测到未登录${NC}"
+            echo -e "${YELLOW}下一步：登录 Telegram 账号${NC}"
+            echo "运行: $TDL_PATH login -n default -T qr"
+            echo ""
+            echo -n "是否现在登录? (y/n): "
+            read -r answer
+            if [ "$answer" = "y" ]; then
+                $TDL_PATH login -n default -T qr
+            fi
         fi
         return 0
     else
@@ -539,6 +546,32 @@ install_msgproce() {
     fi
     
     echo -e "${GREEN}✅ msgproce 安装完成${NC}"
+    echo ""
+    
+    # 检查登录状态并决定是否启动服务
+    if check_tdl_login; then
+        echo -e "${GREEN}✅ 检测到 tdl 已登录${NC}"
+        echo ""
+        echo -e "${YELLOW}自动安装 systemd 服务并启动...${NC}"
+        install_service
+    else
+        echo -e "${YELLOW}⚠️  检测到 tdl 未登录${NC}"
+        echo -e "${YELLOW}请先登录 Telegram 账号才能启动服务${NC}"
+        echo ""
+        echo -n "是否现在登录? (y/n): "
+        read -r answer
+        if [ "$answer" = "y" ]; then
+            $TDL_PATH login -n default -T qr
+            echo ""
+            echo -e "${YELLOW}登录完成后，可使用以下命令启动服务:${NC}"
+            echo "  控制台: $TDL_PATH -n default msgproce"
+            echo "  或重新运行此脚本选择安装 systemd 服务"
+        else
+            echo -e "${YELLOW}跳过登录${NC}"
+            echo -e "${YELLOW}稍后请手动登录: $TDL_PATH login -n default -T qr${NC}"
+        fi
+    fi
+    
     return 0
 }
 
