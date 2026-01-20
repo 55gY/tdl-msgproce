@@ -355,16 +355,8 @@ check_environment() {
 # 安装 tdl
 install_tdl() {
     if check_tdl; then
-        echo -e "${YELLOW}tdl 已安装${NC}"
-        echo -n "是否重新下载安装？（将先停止运行中的服务） (y/n): "
-        read -r answer
-        if [ "$answer" != "y" ]; then
-            return 0
-        fi
-        
-        # 用户确认重新安装，停止运行中的服务
-        echo ""
-        echo -e "${YELLOW}更新前停止服务...${NC}"
+        echo -e "${YELLOW}tdl 已安装，准备覆盖安装...${NC}"
+        echo -e "${YELLOW}停止运行中的服务...${NC}"
         stop_service
         echo ""
     fi
@@ -480,16 +472,8 @@ install_msgproce() {
     fi
     
     if check_msgproce; then
-        echo -e "${YELLOW}msgproce 已安装${NC}"
-        echo -n "是否重新下载安装？（将先停止运行中的服务） (y/n): "
-        read -r answer
-        if [ "$answer" != "y" ]; then
-            return 0
-        fi
-        
-        # 用户确认重新安装，停止运行中的服务
-        echo ""
-        echo -e "${YELLOW}更新前停止服务...${NC}"
+        echo -e "${YELLOW}msgproce 已安装，准备覆盖安装...${NC}"
+        echo -e "${YELLOW}停止运行中的服务...${NC}"
         stop_service
         echo ""
     fi
