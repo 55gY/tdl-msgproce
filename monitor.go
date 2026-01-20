@@ -29,7 +29,7 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 
 	if !shouldProcess {
 		// 真正的重复消息（既不是新消息也不是编辑更新）
-		p.ext.Log().Info("消息重复，已跳过",
+		p.ext.Log().Debug("消息重复，已跳过",
 			zap.Int("message_id", msg.ID),
 			zap.Int64("channel_id", peerID))
 		return 0, 0, nil
@@ -51,7 +51,7 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 	}
 
 	// 打印调试日志
-	p.ext.Log().Info("处理新消息",
+	p.ext.Log().Debug("处理新消息",
 		zap.Int("id", msg.ID),
 		zap.Int64("channel_id", peerID),
 		zap.String("content", msg.Message))
@@ -97,7 +97,7 @@ func (p *MessageProcessor) handleEditMessage(ctx context.Context, msg *tg.Messag
 	if isEdit {
 		editLabel = "再次编辑"
 	}
-	p.ext.Log().Info("处理编辑消息",
+	p.ext.Log().Debug("处理编辑消息",
 		zap.Int("id", msg.ID),
 		zap.Int64("channel_id", peerID),
 		zap.Int("edit_date", editDate),
@@ -237,11 +237,11 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 
 			jsonData, err := json.Marshal(reqBody)
 			if err != nil {
-				p.ext.Log().Info("JSON 序列化失败", zap.Error(err))
+				p.ext.Log().Debug("JSON 序列化失败", zap.Error(err))
 			} else {
 				req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 				if err != nil {
-					p.ext.Log().Info("创建请求失败", zap.Error(err))
+					p.ext.Log().Debug("创建请求失败", zap.Error(err))
 				} else {
 					req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
 					req.Header.Set("Content-Type", "application/json")
@@ -249,16 +249,16 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 					client := &http.Client{Timeout: 120 * time.Second}
 					resp, err := client.Do(req)
 					if err != nil {
-						p.ext.Log().Info("批量节点 API 请求失败", zap.Error(err))
+						p.ext.Log().Debug("批量节点 API 请求失败", zap.Error(err))
 					} else {
 						defer resp.Body.Close()
 
 						body, err := io.ReadAll(resp.Body)
 						if err != nil {
-							p.ext.Log().Info("读取响应失败", zap.Error(err))
+							p.ext.Log().Debug("读取响应失败", zap.Error(err))
 						} else {
 							// 记录原始响应（用于调试）
-							p.ext.Log().Info("批量节点API 响应",
+							p.ext.Log().Debug("批量节点API 响应",
 								zap.Int("status", resp.StatusCode),
 								zap.String("body", string(body)))
 
@@ -277,14 +277,14 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 
 							var response SubscriptionResponse
 							if err := json.Unmarshal(body, &response); err != nil {
-								p.ext.Log().Info("批量节点响应解析失败",
+								p.ext.Log().Debug("批量节点响应解析失败",
 									zap.Error(err),
 									zap.String("body", string(body)),
 									zap.Int("status", resp.StatusCode))
 								// 如果是 200 状态码但解析失败，可能是纯文本响应，视为成功
 								if resp.StatusCode == 200 {
 									nodeCount = len(nodes)
-									p.ext.Log().Info(msgTypeLabel+"批量节点添加成功", zap.Int("node_count", len(nodes)))
+									p.ext.Log().Debug(msgTypeLabel+"批量节点添加成功", zap.Int("node_count", len(nodes)))
 								}
 							} else {
 								// 处理响应
@@ -311,7 +311,7 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 									}
 									fmt.Printf("%s %s-批量节点: %d个 (频道: %d)\n", emoji, msgTypeLabel, len(nodes), peerID)
 								} else if resp.StatusCode == 409 {
-									p.ext.Log().Info(msgTypeLabel+"批量节点已存在",
+									p.ext.Log().Debug(msgTypeLabel+"批量节点已存在",
 										zap.Int("node_count", len(nodes)))
 									nodeCount = len(nodes)
 									emoji := "⚠️"
@@ -324,7 +324,7 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 									if errorMsg == "" {
 										errorMsg = response.Message
 									}
-									p.ext.Log().Info(msgTypeLabel+"批量节点提交失败",
+									p.ext.Log().Debug(msgTypeLabel+"批量节点提交失败",
 										zap.Int("node_count", len(nodes)),
 										zap.String("error", errorMsg))
 								}
@@ -410,7 +410,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 	if isNodeLink {
 		linkType = "节点"
 	}
-	p.ext.Log().Info("API 响应",
+	p.ext.Log().Debug("API 响应",
 		zap.String("type", linkType),
 		zap.Int("status", resp.StatusCode),
 		zap.String("body", string(body)))
@@ -431,14 +431,14 @@ func (p *MessageProcessor) addSubscription(link string) error {
 
 	var response SubscriptionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		p.ext.Log().Info("解析响应失败",
+		p.ext.Log().Debug("解析响应失败",
 			zap.Error(err),
 			zap.String("body", string(body)),
 			zap.Int("status", resp.StatusCode))
 
 		// 如果是 200 状态码但解析失败，可能是纯文本响应，视为成功
 		if resp.StatusCode == 200 {
-			p.ext.Log().Info(linkType+"添加成功（纯文本响应）", zap.String("link", link))
+			p.ext.Log().Debug(linkType+"添加成功（纯文本响应）", zap.String("link", link))
 			return nil
 		}
 		return fmt.Errorf("解析响应失败 (状态码: %d): %w", resp.StatusCode, err)
@@ -481,7 +481,7 @@ func (p *MessageProcessor) addSubscription(link string) error {
 				errorMsg = "该订阅链接已存在"
 			}
 		}
-		p.ext.Log().Info(linkType+"已存在", zap.String("link", link))
+		p.ext.Log().Debug(linkType+"已存在", zap.String("link", link))
 		return nil // 不返回错误，避免重复日志
 	}
 
