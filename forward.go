@@ -145,6 +145,9 @@ func (pw *progressWriter) Write(p []byte) (n int, err error) {
 func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onProgress func(int, string)) error {
 	p.ext.Log().Info("开始转发", zap.String("link", link))
 
+	// 判断是否是文件路径（批量转发）
+	isFilePath := strings.HasSuffix(link, ".json")
+
 	if onProgress == nil {
 		// 如果没有进度回调，直接执行
 		kvd := newMemoryStorage()
@@ -165,7 +168,7 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 			Silent: false,                                         // 是否静默转发：true 时不通知接收者
 			DryRun: false,                                         // 是否空运行：true 时仅模拟不实际执行
 			Single: true,                                          // 是否单条模式：true 时逐条转发
-			Desc:   false,                                         // 是否降序：true 时从新到旧转发
+			Desc:   isFilePath,                                    // 是否降序：json文件时从新到旧转发
 		}
 		client := p.ext.Client()
 		if err := forward.Run(ctx, client, kvd, opts); err != nil {
@@ -188,9 +191,6 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 	rErr, wErr, _ := os.Pipe()
 	os.Stdout = wOut
 	os.Stderr = wErr
-
-	// 判断是否是文件路径（批量转发）
-	isFilePath := strings.HasSuffix(link, ".json")
 
 	// 启动goroutine读取输出并解析进度
 	done := make(chan bool, 2)
@@ -255,7 +255,7 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 		Silent: false,                                         // 是否静默转发：true 时不通知接收者
 		DryRun: false,                                         // 是否空运行：true 时仅模拟不实际执行
 		Single: true,                                          // 是否单条模式：true 时逐条转发
-		Desc:   false,                                         // 是否降序：true 时从新到旧转发
+		Desc:   isFilePath,                                    // 是否降序：json文件时从新到旧转发
 	}
 
 	// 调用 tdl 的 forward 功能
@@ -303,7 +303,7 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 			Silent: false,                     // 是否静默转发：true 时不通知接收者
 			DryRun: false,                     // 是否空运行：true 时仅模拟不实际执行
 			Single: true,                      // 是否单条模式：true 时逐条转发
-			Desc:   false,                     // 是否降序：true 时从新到旧转发
+			Desc:   isFilePath,                // 是否降序：json文件时从新到旧转发
 		}
 		client := p.ext.Client()
 		if err := forward.Run(ctx, client, kvd, opts); err != nil {
@@ -390,7 +390,7 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 		Silent: false,                     // 是否静默转发：true 时不通知接收者
 		DryRun: false,                     // 是否空运行：true 时仅模拟不实际执行
 		Single: true,                      // 是否单条模式：true 时逐条转发
-		Desc:   false,                     // 是否降序：true 时从新到旧转发
+		Desc:   isFilePath,                // 是否降序：json文件时从新到旧转发
 	}
 
 	// 调用 tdl 的 forward 功能
