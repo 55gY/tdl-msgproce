@@ -20,6 +20,8 @@ DATA_DIR="/root/.tdl/extensions/data/msgproce"
 TDL_DATA_DIR="/root/.tdl/data"
 SERVICE_FILE="/etc/systemd/system/tdl-msgproce.service"
 
+# 调试模式配置（设置为 true 启用调试模式，false 禁用）
+DEBUG=true
 # 下载地址
 TDL_RELEASE_URL="https://github.com/iyear/tdl/releases"
 MSGPROCE_RELEASE_URL="https://github.com/55gY/tdl-msgproce/releases"
@@ -698,8 +700,15 @@ start_console() {
     echo -e "${BLUE}================================================${NC}"
     echo ""
     
+    # 构建命令参数
+    local debug_flag=""
+    if [ "$DEBUG" = "true" ]; then
+        debug_flag="--debug"
+        echo -e "${CYAN}调试模式已启用${NC}"
+    fi
+    
     # 直接运行，输出到终端
-    exec $TDL_PATH -n "default" msgproce
+    exec $TDL_PATH -n "default" --reconnect-timeout 0 --limit 2 $debug_flag msgproce
 }
 
 # 安装 systemd 服务
@@ -716,6 +725,13 @@ install_service() {
     
     echo -e "${YELLOW}创建 systemd 服务...${NC}"
     
+    # 根据 DEBUG 变量构建命令
+    local debug_flag=""
+    if [ "$DEBUG" = "true" ]; then
+        debug_flag="--debug"
+        echo -e "${CYAN}调试模式已启用${NC}"
+    fi
+    
     # 创建服务文件
     cat > "$SERVICE_FILE" << EOF
 [Unit]
@@ -726,7 +742,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root/.tdl
-ExecStart=$TDL_PATH -n "default" msgproce
+ExecStart=$TDL_PATH -n "default" --reconnect-timeout 0 --limit 2 $debug_flag msgproce
 # 停止服务时，确保相关进程被终止
 ExecStop=/usr/bin/pkill -f "tdl.*msgproce"
 Restart=always
