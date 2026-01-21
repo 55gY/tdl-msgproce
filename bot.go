@@ -219,10 +219,9 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 				"🔗 支持格式:\n"+
 				"• https://t.me/channel/123\n"+
 				"• @channel_username\n"+
-				"• 📄 目标ID.json (自动验证和清理)\n"+
+				"• 📄 目标ID.json\n"+
 				"• 订阅链接 (http/https)\n"+
-				"• 多个链接（空格或换行分隔）\n\n"+
-				"💡 提示：发送JSON文件时会自动验证所有消息并移除无效项！")
+				"• 多个链接（空格或换行分隔）")
 		return
 	}
 
@@ -1555,100 +1554,19 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 		zap.String("filePath", tmpFilePath),
 		zap.Int64("size", written))
 	
-	// 更新状态 - 开始验证
-	verifyStatusMsg := fmt.Sprintf("✅ 文件下载成功\n\n🔍 正在验证消息ID...\n文件: %s\n大小: %.2f MB\n转发目标: %d",
-		doc.FileName,
-		float64(written)/(1024*1024),
-		forwardTarget)
-	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, verifyStatusMsg)
-	
-	// 进度更新回调
-	lastProgressUpdate := time.Now()
-	onProgress := func(total, validating, valid, invalid int) {
-		// 限制更新频率（最多每1秒更新一次）
-		if time.Since(lastProgressUpdate) < 1*time.Second && validating < total {
-			return
-		}
-		lastProgressUpdate = time.Now()
-		
-		progressMsg := fmt.Sprintf("✅ 文件下载成功\n\n🔍 正在验证消息ID...\n"+
-			"文件: %s\n大小: %.2f MB\n转发目标: %d\n\n"+
-			"📊 验证进度:\n"+
-			"总消息ID数: %d\n"+
-			"正在验证: %d/%d (%.1f%%)\n"+
-			"✅ 验证成功: %d\n"+
-			"❌ 验证失败: %d",
+	// 更新状态 - 文件下载完成
+	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
+		fmt.Sprintf("✅ 文件下载成功\n\n文件: %s\n大小: %.2f MB\n转发目标: %d\n\n🚀 准备开始转发...",
 			doc.FileName,
 			float64(written)/(1024*1024),
-			forwardTarget,
-			total,
-			validating, total, float64(validating)*100/float64(total),
-			valid,
-			invalid)
-		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, progressMsg)
-	}
-	
-	// 验证并清理JSON（传入进度回调）
-	result, err := p.VerifyJSONMessages(ctx, tmpFilePath, onProgress)
-	if err != nil {
-		p.ext.Log().Error("验证JSON失败", zap.Error(err))
-		os.Remove(tmpFilePath)
-		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-			"❌ 验证JSON失败: "+err.Error())
-		return
-	}
-	
-	// 显示验证结果
-	verifyResultMsg := fmt.Sprintf("📊 验证完成\n\n"+
-		"总消息数: %d\n"+
-		"✅ 有效: %d (%.1f%%)\n"+
-		"❌ 无效: %d (%.1f%%)\n",
-		result.TotalMessages,
-		result.ValidMessages,
-		float64(result.ValidMessages)*100/float64(result.TotalMessages),
-		result.InvalidMessages,
-		float64(result.InvalidMessages)*100/float64(result.TotalMessages))
-	
-	if result.FirstErrorIndex >= 0 {
-		verifyResultMsg += fmt.Sprintf("\n⚠️ 第一个错误:\n位置: 第%d条\nID: %d\n",
-			result.FirstErrorIndex+1,
-			result.FirstErrorID)
-	}
-	
-	// 决定使用哪个文件
-	var finalFilePath string
-	if result.InvalidMessages > 0 {
-		// 创建清理后的文件
-		cleanedFile := tmpFilePath[:len(tmpFilePath)-5] + "_cleaned.json"
-		if err := p.CreateCleanedJSON(tmpFilePath, cleanedFile, result.InvalidIDs); err != nil {
-			p.ext.Log().Error("创建清理文件失败", zap.Error(err))
-			os.Remove(tmpFilePath)
-			p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-				"❌ 创建清理文件失败: "+err.Error())
-			return
-		}
-		
-		verifyResultMsg += fmt.Sprintf("\n✅ 已生成清理文件\n将使用 %d 条有效消息进行转发", result.ValidMessages)
-		finalFilePath = cleanedFile
-		
-		// 删除原始文件，只保留清理后的
-		os.Remove(tmpFilePath)
-	} else {
-		verifyResultMsg += "\n✅ 所有消息有效，开始转发"
-		finalFilePath = tmpFilePath
-	}
-	
-	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, verifyResultMsg)
-	
-	time.Sleep(3 * time.Second)
-	
-	// 更新状态为准备转发
-	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-		fmt.Sprintf("%s\n\n🚀 准备开始转发...", verifyResultMsg))
+			forwardTarget))
 	
 	time.Sleep(2 * time.Second)
 	
-	// 创建转发任务（使用清理后的文件路径）
+	// 直接使用原始文件
+	finalFilePath := tmpFilePath
+	
+	// 创建转发任务
 	batchID := taskManager.GetNextBatchID(msg.From.ID)
 	taskID := taskManager.GetNextTaskID(msg.From.ID)
 	
@@ -1709,29 +1627,16 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	// 异步执行批量转发（使用自定义转发目标）
 	go func() {
 		p.executeBatchTasksWithTarget(batchCtx, bot, taskManager, batch, forwardTarget)
-		// 任务完成后智能清理文件
+		// 任务完成后清理文件
 		time.Sleep(2 * time.Second) // 等待最后的状态更新
 		
-		if result.InvalidMessages > 0 {
-			// 有无效消息时：删除原始文件，保留清理后的文件
-			if err := os.Remove(doc.FileName); err != nil {
-				p.ext.Log().Warn("删除原始文件失败",
-					zap.String("filePath", doc.FileName),
-					zap.Error(err))
-			} else {
-				p.ext.Log().Info("原始文件已删除，清理后的文件已保留",
-					zap.String("deleted", doc.FileName),
-					zap.String("kept", finalFilePath))
-			}
+		// 删除文件
+		if err := os.Remove(finalFilePath); err != nil {
+			p.ext.Log().Warn("删除文件失败",
+				zap.String("filePath", finalFilePath),
+				zap.Error(err))
 		} else {
-			// 全部有效时：删除文件（此时finalFilePath就是原始文件）
-			if err := os.Remove(finalFilePath); err != nil {
-				p.ext.Log().Warn("删除文件失败",
-					zap.String("filePath", finalFilePath),
-					zap.Error(err))
-			} else {
-				p.ext.Log().Info("文件已删除", zap.String("filePath", finalFilePath))
-			}
+			p.ext.Log().Info("文件已删除", zap.String("filePath", finalFilePath))
 		}
 	}()
 }

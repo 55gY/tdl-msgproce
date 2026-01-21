@@ -157,14 +157,22 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 		default:
 			mode = forwarder.ModeClone
 		}
+		
+		// 判断是否是文件路径（json 文件转发时启用调试）
+		isFilePath := strings.HasSuffix(link, ".json")
+		
 		opts := forward.Options{
-			From:   []string{link},
-			To:     fmt.Sprintf("%d", p.config.Bot.ForwardTarget),
-			Mode:   mode,
-			Silent: false,
-			DryRun: false,
-			Single: true,
-			Desc:   false,
+			From:             []string{link},                                // 转发源：频道链接或文件路径
+			To:               fmt.Sprintf("%d", p.config.Bot.ForwardTarget), // 转发目标：目标频道或群组 ID
+			Mode:             mode,                                          // 转发模式：clone(克隆) 或 direct(直接转发)
+			Silent:           false,                                         // 是否静默转发：true 时不通知接收者
+			DryRun:           false,                                         // 是否空运行：true 时仅模拟不实际执行
+			Single:           true,                                          // 是否单条模式：true 时逐条转发
+			Desc:             false,                                         // 是否降序：true 时从新到旧转发
+			ReconnectTimeout: 0,                                             // Telegram 客户端重连超时时间，0 表示无限重连
+			Debug:            isFilePath,                                    // 是否启用调试模式：json 文件转发时启用
+			Delay:            0,                                             // 任务间延迟时间：0 表示无延迟
+			Limit:            2,                                             // 最大并发任务数：控制同时处理的任务数量
 		}
 		client := p.ext.Client()
 		if err := forward.Run(ctx, client, kvd, opts); err != nil {
@@ -248,13 +256,17 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 
 	// 准备 forward 选项
 	opts := forward.Options{
-		From:   []string{link}, // 从链接或文件路径转发
-		To:     fmt.Sprintf("%d", p.config.Bot.ForwardTarget),
-		Mode:   mode,
-		Silent: false,
-		DryRun: false,
-		Single: true, // 使用单条模式
-		Desc:   false,
+		From:             []string{link},                                // 转发源：频道链接或文件路径
+		To:               fmt.Sprintf("%d", p.config.Bot.ForwardTarget), // 转发目标：目标频道或群组 ID
+		Mode:             mode,                                          // 转发模式：clone(克隆) 或 direct(直接转发)
+		Silent:           false,                                         // 是否静默转发：true 时不通知接收者
+		DryRun:           false,                                         // 是否空运行：true 时仅模拟不实际执行
+		Single:           true,                                          // 是否单条模式：true 时逐条转发
+		Desc:             false,                                         // 是否降序：true 时从新到旧转发
+		ReconnectTimeout: 0,                                             // Telegram 客户端重连超时时间，0 表示无限重连
+		Debug:            isFilePath,                                    // 是否启用调试模式：json 文件转发时启用
+		Delay:            0,                                             // 任务间延迟时间：0 表示无延迟
+		Limit:            2,                                             // 最大并发任务数：控制同时处理的任务数量
 	}
 
 	// 调用 tdl 的 forward 功能
@@ -296,13 +308,17 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 		}
 		
 		opts := forward.Options{
-			From:   []string{link},
-			To:     fmt.Sprintf("%d", target),
-			Mode:   mode,
-			Silent: false,
-			DryRun: false,
-			Single: true,
-			Desc:   false,
+			From:             []string{link},            // 转发源：频道链接或文件路径
+			To:               fmt.Sprintf("%d", target), // 转发目标：自定义目标频道或群组 ID
+			Mode:             mode,                      // 转发模式：clone(克隆) 或 direct(直接转发)
+			Silent:           false,                     // 是否静默转发：true 时不通知接收者
+			DryRun:           false,                     // 是否空运行：true 时仅模拟不实际执行
+			Single:           true,                      // 是否单条模式：true 时逐条转发
+			Desc:             false,                     // 是否降序：true 时从新到旧转发
+			ReconnectTimeout: 0,                         // Telegram 客户端重连超时时间，0 表示无限重连
+			Debug:            isFilePath,                // 是否启用调试模式：json 文件转发时启用
+			Delay:            0,                         // 任务间延迟时间：0 表示无延迟
+			Limit:            2,                         // 最大并发任务数：控制同时处理的任务数量
 		}
 		client := p.ext.Client()
 		if err := forward.Run(ctx, client, kvd, opts); err != nil {
@@ -383,13 +399,17 @@ func (p *MessageProcessor) forwardFromLinkWithTarget(ctx context.Context, link s
 
 	// 准备 forward 选项（使用自定义目标）
 	opts := forward.Options{
-		From:   []string{link},
-		To:     fmt.Sprintf("%d", target),
-		Mode:   mode,
-		Silent: false,
-		DryRun: false,
-		Single: true,
-		Desc:   false,
+		From:             []string{link},            // 转发源：频道链接或文件路径
+		To:               fmt.Sprintf("%d", target), // 转发目标：自定义目标频道或群组 ID
+		Mode:             mode,                      // 转发模式：clone(克隆) 或 direct(直接转发)
+		Silent:           false,                     // 是否静默转发：true 时不通知接收者
+		DryRun:           false,                     // 是否空运行：true 时仅模拟不实际执行
+		Single:           true,                      // 是否单条模式：true 时逐条转发
+		Desc:             false,                     // 是否降序：true 时从新到旧转发
+		ReconnectTimeout: 0,                         // Telegram 客户端重连超时时间，0 表示无限重连
+		Debug:            isFilePath,                // 是否启用调试模式：json 文件转发时启用
+		Delay:            0,                         // 任务间延迟时间：0 表示无延迟
+		Limit:            2,                         // 最大并发任务数：控制同时处理的任务数量
 	}
 
 	// 调用 tdl 的 forward 功能
