@@ -158,9 +158,6 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, onP
 			mode = forwarder.ModeClone
 		}
 		
-		// 判断是否是文件路径（json 文件转发时启用调试）
-		isFilePath := strings.HasSuffix(link, ".json")
-		
 		opts := forward.Options{
 			From:   []string{link},                                // 转发源：频道链接或文件路径
 			To:     fmt.Sprintf("%d", p.config.Bot.ForwardTarget), // 转发目标：目标频道或群组 ID
