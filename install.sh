@@ -21,7 +21,7 @@ TDL_DATA_DIR="/root/.tdl/data"
 SERVICE_FILE="/etc/systemd/system/tdl-msgproce.service"
 
 # 调试模式配置（设置为 true 启用调试模式，false 禁用）
-DEBUG=true
+DEBUG=false
 # 下载地址
 TDL_RELEASE_URL="https://github.com/iyear/tdl/releases"
 MSGPROCE_RELEASE_URL="https://github.com/55gY/tdl-msgproce/releases"
