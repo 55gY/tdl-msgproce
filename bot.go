@@ -1797,7 +1797,7 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	batchID := taskManager.GetNextBatchID(msg.From.ID)
 	var allTasks []*ForwardTask
 	
-	for i, link := range links {
+	for _, link := range links {
 		taskID := taskManager.GetNextTaskID(msg.From.ID)
 		task := &ForwardTask{
 			ID:        taskID,
