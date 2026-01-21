@@ -708,7 +708,7 @@ start_console() {
     fi
     
     # 直接运行，输出到终端
-    exec $TDL_PATH -n "default" --reconnect-timeout 0 --limit 2 $debug_flag msgproce
+    exec $TDL_PATH -n "default" --reconnect-timeout 0 --limit 10 $debug_flag msgproce
 }
 
 # 安装 systemd 服务
@@ -742,7 +742,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root/.tdl
-ExecStart=$TDL_PATH -n "default" --reconnect-timeout 0 --limit 2 $debug_flag msgproce
+ExecStart=$TDL_PATH -n "default" --reconnect-timeout 0 --limit 10 $debug_flag msgproce
 # 停止服务时，确保相关进程被终止
 ExecStop=/usr/bin/pkill -f "tdl.*msgproce"
 Restart=always
