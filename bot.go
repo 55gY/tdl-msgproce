@@ -1027,7 +1027,69 @@ func (p *MessageProcessor) buildBatchStatusText(batchID int, tasks []*ForwardTas
 	return sb.String()
 }
 
-// executeBatchTasksWithTarget 执行批量转发任务（带自定义目标）
+// buildGroupedBatchStatusText 构建分组批次状态文本
+// startIdx: 当前显示组的起始索引（包含）
+// endIdx: 当前显示组的结束索引（不包含）
+func (p *MessageProcessor) buildGroupedBatchStatusText(batchID int, allTasks []*ForwardTask, startIdx, endIdx int) string {
+	var sb strings.Builder
+
+	// 计算统计信息
+	var completed, failed int
+	for _, task := range allTasks {
+		switch task.Status {
+		case "completed":
+			completed++
+		case "failed":
+			failed++
+		}
+	}
+
+	// 标题：显示整体进度
+	sb.WriteString(fmt.Sprintf("📦 批次 #%d | 总任务数量: %d/%d\n\n", batchID, completed+failed, len(allTasks)))
+
+	// 显示当前组的任务（最多5个）
+	currentGroupTasks := allTasks[startIdx:endIdx]
+	for _, task := range currentGroupTasks {
+		var statusIcon string
+		var statusText string
+
+		switch task.Status {
+		case "pending":
+			statusIcon = "⏸"
+			statusText = "待处理"
+		case "running":
+			statusIcon = "🔄"
+			statusText = fmt.Sprintf("转发中 %d%%", task.Progress)
+		case "completed":
+			statusIcon = "✅"
+			statusText = "已完成"
+		case "cancelled":
+			statusIcon = "🚫"
+			statusText = "已取消"
+		case "failed":
+			statusIcon = "❌"
+			if task.Error != "" {
+				statusText = fmt.Sprintf("失败: %s", task.Error)
+			} else {
+				statusText = "失败"
+			}
+		default:
+			statusIcon = "❓"
+			statusText = "未知"
+		}
+
+		// 显示任务信息
+		sb.WriteString(fmt.Sprintf("🔗 %s #%d [%s] %s\n", statusIcon, task.ID, statusText, task.Link))
+	}
+
+	// 显示统计信息
+	sb.WriteString(fmt.Sprintf("\n✅成功:%d | ❌失败:%d\n", completed, failed))
+	sb.WriteString("🔴 终止所有任务")
+
+	return sb.String()
+}
+
+// buildBatchStatusText 构建批次状态文本（原有函数）
 func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot *tgbotapi.BotAPI, taskManager *TaskManager, batch *BatchTask, customTarget int64) {
 	defer taskManager.RemoveBatch(batch.UserID, batch.BatchID)
 
@@ -1090,7 +1152,7 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 		}
 
 		// 执行转发（传入进度回调和自定义目标）
-		err := p.forwardFromLinkWithTarget(ctx, task.Link, customTarget, onProgress)
+		err := p.forwardFromLink(ctx, task.Link, &customTarget, onProgress)
 
 		// 检查context是否被取消
 		if ctx.Err() == context.Canceled {
@@ -1153,6 +1215,157 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 		"耗时: %v",
 		batch.BatchID,
 		len(batch.Tasks),
+		completed,
+		failed,
+		cancelled,
+		time.Since(batch.StartTime).Round(time.Second),
+	)
+
+	p.updateBotMessage(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, finalText)
+}
+
+// executeGroupedBatchTasksWithTarget 执行分组批量转发任务（带自定义目标）
+// groupSize: 每组显示的任务数量
+func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Context, bot *tgbotapi.BotAPI, taskManager *TaskManager, batch *BatchTask, customTarget int64, groupSize int) {
+	defer taskManager.RemoveBatch(batch.UserID, batch.BatchID)
+
+	// 创建取消按钮
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🛑 终止所有任务", fmt.Sprintf("cancel_batch_%d_%d", batch.UserID, batch.BatchID)),
+		),
+	)
+
+	totalTasks := len(batch.Tasks)
+	totalGroups := (totalTasks + groupSize - 1) / groupSize
+
+	// 逐组执行任务
+	for groupIndex := 0; groupIndex < totalGroups; groupIndex++ {
+		// 计算当前组的任务范围
+		startIdx := groupIndex * groupSize
+		endIdx := startIdx + groupSize
+		if endIdx > totalTasks {
+			endIdx = totalTasks
+		}
+		
+		currentGroupTasks := batch.Tasks[startIdx:endIdx]
+		
+		// 更新显示当前组
+		statusText := p.buildGroupedBatchStatusText(batch.BatchID, batch.Tasks, startIdx, endIdx)
+		p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
+		
+		// 执行当前组的任务
+		for _, task := range currentGroupTasks {
+			// 检查是否已取消
+			task.CancelMutex.Lock()
+			if task.Cancelled {
+				task.CancelMutex.Unlock()
+				// 标记所有剩余任务为已取消
+				for j := startIdx; j < totalTasks; j++ {
+					if batch.Tasks[j].Status == "pending" {
+						batch.Tasks[j].Status = "cancelled"
+						batch.Tasks[j].Error = "批次已终止"
+					}
+				}
+				goto done
+			}
+			task.CancelMutex.Unlock()
+
+			// 检查context是否被取消
+			select {
+			case <-ctx.Done():
+				task.Status = "cancelled"
+				task.Error = "批次已终止"
+				// 标记所有剩余任务为已取消
+				for j := startIdx; j < totalTasks; j++ {
+					if batch.Tasks[j].Status == "pending" {
+						batch.Tasks[j].Status = "cancelled"
+						batch.Tasks[j].Error = "批次已终止"
+					}
+				}
+				goto done
+			default:
+			}
+
+			// 设置任务状态为运行中
+			task.Status = "running"
+			task.Progress = 0
+			
+			// 更新显示（任务开始）
+			statusText := p.buildGroupedBatchStatusText(batch.BatchID, batch.Tasks, startIdx, endIdx)
+			p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
+
+			// 进度回调（单链接转发保持0%直到完成）
+			onProgress := func(percent int, line string) {
+				task.Progress = percent
+			}
+
+			// 执行转发（传入目标参数）
+			err := p.forwardFromLink(ctx, task.Link, &customTarget, onProgress)
+
+			// 检查context是否被取消
+			if ctx.Err() == context.Canceled {
+				task.Status = "cancelled"
+				task.Error = "用户终止"
+			} else if err != nil {
+				task.Status = "failed"
+				task.Error = err.Error()
+				p.ext.Log().Info("转发失败", zap.Int("taskID", task.ID), zap.String("link", task.Link), zap.Error(err))
+			} else {
+				task.Status = "completed"
+				task.Progress = 100
+				p.forwardCount++
+				p.ext.Log().Info("转发成功", zap.Int("taskID", task.ID), zap.String("link", task.Link))
+			}
+
+			// 更新显示（任务完成）
+			statusText = p.buildGroupedBatchStatusText(batch.BatchID, batch.Tasks, startIdx, endIdx)
+			p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
+
+			// 检查任务是否被取消
+			if task.Status == "cancelled" {
+				// 标记所有剩余任务为已取消
+				for j := startIdx; j < totalTasks; j++ {
+					if batch.Tasks[j].Status == "pending" {
+						batch.Tasks[j].Status = "cancelled"
+						batch.Tasks[j].Error = "批次已终止"
+					}
+				}
+				goto done
+			}
+
+			// 任务间隔（避免频繁操作）
+			time.Sleep(500 * time.Millisecond)
+		}
+		
+		// 当前组完成，如果不是最后一组，稍作等待再进入下一组
+		if groupIndex < totalGroups-1 {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+done:
+	// 最终状态统计
+	var completed, failed, cancelled int
+	for _, task := range batch.Tasks {
+		switch task.Status {
+		case "completed":
+			completed++
+		case "failed":
+			failed++
+		case "cancelled":
+			cancelled++
+		}
+	}
+
+	finalText := fmt.Sprintf("📦 批次 #%d 已完成\n\n"+
+		"总计: %d个任务\n"+
+		"✅ 成功: %d\n"+
+		"⚠️ 失败: %d\n"+
+		"❌ 取消: %d\n\n"+
+		"耗时: %v",
+		batch.BatchID,
+		totalTasks,
 		completed,
 		failed,
 		cancelled,
@@ -1225,7 +1438,7 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		}
 
 		// 执行转发（传入进度回调）
-		err := p.forwardFromLink(ctx, task.Link, onProgress)
+		err := p.forwardFromLink(ctx, task.Link, nil, onProgress)
 
 		// 检查context是否被取消
 		if ctx.Err() == context.Canceled {
@@ -1566,31 +1779,52 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	// 直接使用原始文件
 	finalFilePath := tmpFilePath
 	
-	// 创建转发任务
-	batchID := taskManager.GetNextBatchID(msg.From.ID)
-	taskID := taskManager.GetNextTaskID(msg.From.ID)
-	
-	task := &ForwardTask{
-		ID:        taskID,
-		Link:      finalFilePath, // 使用清理后的文件路径
-		UserID:    msg.From.ID,
-		Status:    "pending",
-		Cancelled: false,
+	// 解析 JSON 文件获取消息链接
+	links, err := p.parseJSONMessages(finalFilePath)
+	if err != nil {
+		p.ext.Log().Error("解析 JSON 文件失败", zap.Error(err))
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
+			fmt.Sprintf("❌ 解析文件失败\n\n错误: %s", err.Error()))
+		os.Remove(tmpFilePath)
+		return
 	}
 	
-	tasks := []*ForwardTask{task}
+	p.ext.Log().Info("JSON 解析完成", 
+		zap.String("file", finalFilePath),
+		zap.Int("totalMessages", len(links)))
 	
-	// 发送警告提示
-	p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-		"⚠️ 批量转发任务\n\n"+
+	// 创建转发任务（每5条消息为一组）
+	batchID := taskManager.GetNextBatchID(msg.From.ID)
+	var allTasks []*ForwardTask
+	
+	for i, link := range links {
+		taskID := taskManager.GetNextTaskID(msg.From.ID)
+		task := &ForwardTask{
+			ID:        taskID,
+			Link:      link,
+			UserID:    msg.From.ID,
+			Status:    "pending",
+			Cancelled: false,
+		}
+		allTasks = append(allTasks, task)
+	}
+	
+	// 更新状态消息为任务概览
+	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
+		fmt.Sprintf("⚠️ 批量转发任务\n\n"+
+			"📊 任务概览：\n"+
+			"• 总消息数: %d\n"+
+			"• 转发目标: %d\n"+
+			"• 分组数: %d (每组5条)\n\n"+
 			"📌 注意事项：\n"+
 			"• 大规模迁移可能需要数小时甚至数天\n"+
 			"• 程序无超时限制，会持续运行直到完成\n"+
 			"• 可随时点击按钮终止任务\n"+
 			"• 建议保持程序稳定运行\n"+
-			"• Bot 会定期更新进度（每30秒）\n"+
+			"• Bot 会实时更新当前组的进度\n"+
 			"• 任务完成后将自动删除文件\n\n"+
-			"即将开始执行...")
+			"即将开始执行...",
+			len(links), forwardTarget, (len(links)+4)/5))
 	time.Sleep(3 * time.Second)
 	
 	// 创建取消按钮
@@ -1600,8 +1834,15 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 		),
 	)
 	
+	// 初始显示第一组任务（最多5个）
+	firstGroupSize := 5
+	if len(allTasks) < firstGroupSize {
+		firstGroupSize = len(allTasks)
+	}
+	firstGroupTasks := allTasks[:firstGroupSize]
+	
 	// 发送汇总状态消息
-	statusText := p.buildBatchStatusText(batchID, tasks)
+	statusText := p.buildBatchStatusText(batchID, firstGroupTasks)
 	batchStatusMsg := p.sendBotMessageWithKeyboard(bot, msg.Chat.ID, statusText, keyboard)
 	if batchStatusMsg == nil {
 		os.Remove(tmpFilePath) // 清理文件
@@ -1611,11 +1852,11 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	// 创建可取消的 context
 	batchCtx, cancel := context.WithCancel(ctx)
 	
-	// 创建批量任务
+	// 创建批量任务（包含所有任务用于统计）
 	batch := &BatchTask{
 		BatchID:   batchID,
 		UserID:    msg.From.ID,
-		Tasks:     tasks,
+		Tasks:     allTasks,
 		StatusMsg: batchStatusMsg,
 		Cancel:    cancel,
 		StartTime: time.Now(),
@@ -1624,9 +1865,9 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	// 添加到任务管理器
 	taskManager.AddBatch(batch)
 	
-	// 异步执行批量转发（使用自定义转发目标）
+	// 异步执行分组批量转发
 	go func() {
-		p.executeBatchTasksWithTarget(batchCtx, bot, taskManager, batch, forwardTarget)
+		p.executeGroupedBatchTasksWithTarget(batchCtx, bot, taskManager, batch, forwardTarget, 5)
 		// 任务完成后清理文件
 		time.Sleep(2 * time.Second) // 等待最后的状态更新
 		
