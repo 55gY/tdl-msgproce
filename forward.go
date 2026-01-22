@@ -246,8 +246,7 @@ func (p *MessageProcessor) parseJSONMessages(jsonFilePath string) ([]string, err
 	type ExportData struct {
 		ID       int64 `json:"id"`
 		Messages []struct {
-			ID   int    `json:"id"`
-			Type string `json:"type"`
+			ID int `json:"id"`
 		} `json:"messages"`
 	}
 
@@ -272,10 +271,6 @@ func (p *MessageProcessor) parseJSONMessages(jsonFilePath string) ([]string, err
 	// 构造消息链接
 	var links []string
 	for _, msg := range export.Messages {
-		// 只处理 message 类型的记录
-		if msg.Type != "message" {
-			continue
-		}
 		// 构造 t.me 链接
 		link := fmt.Sprintf("https://t.me/c/%d/%d", channelID, msg.ID)
 		links = append(links, link)
