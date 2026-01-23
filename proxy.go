@@ -23,7 +23,7 @@ func NewProxyServer(cfg *ProxyConfig) *ProxyServer {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/proxy", ps.handleProxy)
+	mux.HandleFunc("/sub", ps.handleProxy)
 
 	ps.server = &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
