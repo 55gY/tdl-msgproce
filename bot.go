@@ -418,7 +418,6 @@ func (p *MessageProcessor) updateBotMessage(bot *tgbotapi.BotAPI, chatID int64, 
 	bot.Send(edit)
 }
 
-// handleSubscriptionLink 处理订阅链接或代理节点
 // addNodesBatchToAPI 批量添加节点到 API
 func (p *MessageProcessor) addNodesBatchToAPI(nodes []string) (bool, *SubscriptionResponse) {
 	if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
@@ -537,6 +536,8 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 	// 合并结果统计
 	var allResponses []*SubscriptionResponse
 	var totalDurationSeconds float64
+	var successMessages []string
+	var errorMessages []string
 
 	// 处理订阅（逐个提交）
 	for _, subLink := range subscriptions {
@@ -545,8 +546,10 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 
 		if success {
 			p.ext.Log().Info("订阅添加成功: " + subLink)
+			successMessages = append(successMessages, responseMsg)
 		} else {
 			p.ext.Log().Error("订阅添加失败: " + subLink + " - " + responseMsg)
+			errorMessages = append(errorMessages, responseMsg)
 		}
 
 		// 解析响应统计信息
@@ -657,17 +660,24 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 		if totalDurationSeconds > 0 {
 			finalMsg += fmt.Sprintf("⏱ 耗时: %.2fs", totalDurationSeconds)
 		}
+	} else if len(successMessages) > 0 || len(errorMessages) > 0 {
+		// 没有统计信息但有响应消息
+		if len(successMessages) > 0 {
+			finalMsg = strings.Join(successMessages, "\n")
+		}
+		if len(errorMessages) > 0 {
+			if finalMsg != "" {
+				finalMsg += "\n\n"
+			}
+			finalMsg += strings.Join(errorMessages, "\n")
+		}
 	} else {
-		finalMsg = "❌ 处理失败，未获取到有效响应"
+		// 完全没有响应信息
+		finalMsg = "❌ 处理失败\n\n可能原因：\n1. API配置错误，请检查config.yaml\n2. 网络连接问题\n3. 订阅链接格式不正确"
 	}
 
 	// 更新状态消息
 	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, finalMsg)
-}
-
-// handleSubscriptionLink 处理单个订阅/节点链接 (保持兼容性)
-func (p *MessageProcessor) handleSubscriptionLink(ctx context.Context, bot *tgbotapi.BotAPI, msg *tgbotapi.Message, link string) {
-	p.handleSubscriptionLinks(ctx, bot, msg, []string{link})
 }
 
 // extractTelegramLinks 提取 Telegram 链接
@@ -911,6 +921,22 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 		return false, fmt.Sprintf("⚠️ %s", errorMsg)
 	}
 
+	// 处理服务器错误（500+）
+	if resp.StatusCode >= 500 {
+		errorMsg := response.Error
+		if errorMsg == "" {
+			errorMsg = response.Message
+		}
+		if errorMsg == "" {
+			errorMsg = fmt.Sprintf("服务器错误 (状态码: %d)", resp.StatusCode)
+		}
+		p.ext.Log().Error(fmt.Sprintf("%s服务器错误", linkType),
+			zap.String("link", link),
+			zap.Int("status", resp.StatusCode),
+			zap.String("error", errorMsg))
+		return false, fmt.Sprintf("❌ %s", errorMsg)
+	}
+
 	// 其他错误
 	errorMsg := response.Error
 	if errorMsg == "" {
@@ -1084,7 +1110,7 @@ func (p *MessageProcessor) buildGroupedBatchStatusText(batchID int, allTasks []*
 
 	// 显示统计信息
 	sb.WriteString(fmt.Sprintf("\n✅成功:%d | ❌失败:%d\n", completed, failed))
-	sb.WriteString("🔴 终止所有任务")
+	
 
 	return sb.String()
 }
