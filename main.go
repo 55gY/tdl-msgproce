@@ -85,6 +85,15 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 		}()
 	}
 
+	if config.Proxy.Enabled {
+		ext.Log().Info("🔄 启动 HTTP 代理服务...", zap.String("addr", fmt.Sprintf("%s:%d", config.Proxy.Host, config.Proxy.Port)))
+		activeServices++
+		proxyServer := NewProxyServer(&config.Proxy)
+		go func() {
+			errChan <- proxyServer.Start(ctx)
+		}()
+	}
+
 	fmt.Println("========================================")
 	if activeServices > 0 {
 		fmt.Printf("✅ %d 个服务已启动\n", activeServices)

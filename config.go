@@ -11,6 +11,7 @@ import (
 type Config struct {
 	Bot     BotConfig     `yaml:"bot"`
 	Monitor MonitorConfig `yaml:"monitor"`
+	Proxy   ProxyConfig   `yaml:"proxy"`
 }
 
 // BotConfig Telegram Bot 配置
@@ -44,6 +45,16 @@ type MonitorConfig struct {
 		ContentFilter []string `yaml:"content_filter"` // 二次内容过滤（仅对订阅生效）
 		LinkBlacklist []string `yaml:"link_blacklist"`
 	} `yaml:"filters"`
+}
+
+// ProxyConfig HTTP 代理配置（用于订阅解析）
+type ProxyConfig struct {
+	Enabled       bool   `yaml:"enabled"`        // 是否启用代理服务
+	Host          string `yaml:"host"`           // 监听地址（0.0.0.0 允许外部访问，127.0.0.1 仅本地）
+	Port          int    `yaml:"port"`           // 监听端口
+	Token         string `yaml:"token"`          // 访问 Token
+	Timeout       int    `yaml:"timeout"`        // 请求超时时间（秒）
+	MaxConcurrent int    `yaml:"max_concurrent"` // 最大并发请求数
 }
 
 // loadConfig 加载配置文件

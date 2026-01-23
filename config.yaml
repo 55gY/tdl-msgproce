@@ -87,3 +87,12 @@ monitor:
       - ".bmp"
       - "go1.569521.xyz"
 
+# ==================== HTTP 代理配置 ====================
+proxy:
+  enabled: false               # 是否启用代理服务（默认关闭）
+  host: "0.0.0.0"             # 监听地址（0.0.0.0 允许外部访问）
+  port: 8080                  # 监听端口
+  token: "your_secret_token"  # 访问密钥（请修改为强密码）
+  timeout: 180                # 请求超时时间（秒）
+  max_concurrent: 10          # 最大并发请求数
+
