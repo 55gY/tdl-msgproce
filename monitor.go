@@ -784,7 +784,13 @@ func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.
 		zap.Int64("频道ID", channelID))
 	
 	// 克隆成功后删除原始带转发头的消息
-	if err := p.deleteChannelMessage(ctx, channelID, msg.ID); err != nil {
+	deleteRequest := &tg.MessagesDeleteMessagesRequest{
+		Revoke: true, // 对所有人删除
+		ID:     []int{msg.ID},
+	}
+	
+	affectedMessages, err := p.api.MessagesDeleteMessages(ctx, deleteRequest)
+	if err != nil {
 		p.ext.Log().Warn("删除原始转发消息失败（已成功克隆）",
 			zap.Int("原消息ID", msg.ID),
 			zap.Error(err))
@@ -792,34 +798,9 @@ func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.
 	} else {
 		p.ext.Log().Info("🗑️ 已删除原始转发消息",
 			zap.Int("消息ID", msg.ID),
-			zap.Int64("频道ID", channelID))
+			zap.Int64("频道ID", channelID),
+			zap.Int("pts", affectedMessages.Pts))
 	}
 	
-	return nil
-}
-
-// deleteChannelMessage 删除频道消息
-func (p *MessageProcessor) deleteChannelMessage(ctx context.Context, channelID int64, messageID int) error {
-	// 构造 InputChannel
-	inputChannel := &tg.InputChannel{
-		ChannelID:  channelID,
-		AccessHash: 0, // 将尝试从缓存获取
-	}
-
-	// 调用 ChannelsDeleteMessages API
-	deleteRequest := &tg.ChannelsDeleteMessagesRequest{
-		Channel: inputChannel,
-		ID:      []int{messageID},
-	}
-
-	affectedMessages, err := p.api.ChannelsDeleteMessages(ctx, deleteRequest)
-	if err != nil {
-		return fmt.Errorf("删除消息失败: %w", err)
-	}
-
-	p.ext.Log().Debug("删除消息API响应",
-		zap.Int("pts", affectedMessages.Pts),
-		zap.Int("pts_count", affectedMessages.PtsCount))
-
 	return nil
 }
