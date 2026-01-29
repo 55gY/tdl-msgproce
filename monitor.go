@@ -44,9 +44,9 @@ func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, e
 			zap.Int64("channel_id", peerID))
 	}
 
-	// 检查是否是监听的频道
+	// 检查是否是监听的频道（为 forward_target 添加例外）
 	if len(p.config.Monitor.Channels) > 0 {
-		if !contains(p.config.Monitor.Channels, peerID) {
+		if !contains(p.config.Monitor.Channels, peerID) && !(p.config.Monitor.Features.AutoRecloneForwards && peerID == p.config.Bot.ForwardTarget) {
 			return 0, 0, nil
 		}
 	}
@@ -86,9 +86,9 @@ func (p *MessageProcessor) handleEditMessage(ctx context.Context, msg *tg.Messag
 		return 0, 0, nil
 	}
 
-	// 检查是否是监听的频道
+	// 检查是否是监听的频道（为 forward_target 添加例外）
 	if len(p.config.Monitor.Channels) > 0 {
-		if !contains(p.config.Monitor.Channels, peerID) {
+		if !contains(p.config.Monitor.Channels, peerID) && !(p.config.Monitor.Features.AutoRecloneForwards && peerID == p.config.Bot.ForwardTarget) {
 			return 0, 0, nil
 		}
 	}
