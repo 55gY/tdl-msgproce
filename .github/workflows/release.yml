@@ -123,54 +123,7 @@ jobs:
             config.yaml
             install.sh
           body: |
-            ## tdl-msgproce ${{ steps.get_version.outputs.VERSION }}
-            
-            ### 📦 下载说明
-            
-            - **Linux AMD64**: `tdl-msgproce_linux_amd64`
-            - **Windows AMD64**: `tdl-msgproce_windows_amd64.exe`
-            
-            ### 🚀 快速安装
-            
-            **Linux:**
-            ```bash
-            # 下载安装脚本
-            wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.VERSION }}/install.sh
-            chmod +x install.sh
-            
-            # 下载二进制文件
-            wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.VERSION }}/tdl-msgproce_linux_amd64
-            mv tdl-msgproce_linux_amd64 tdl-msgproce
-            
-            # 运行安装脚本
-            ./install.sh
-            ```
-            
-            **Windows:**
-            ```powershell
-            # 下载并重命名
-            Invoke-WebRequest -Uri "https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.VERSION }}/tdl-msgproce_windows_amd64.exe" -OutFile "tdl-msgproce.exe"
-            ```
-            
-            ### 📝 配置说明
-            
-            1. 下载 `config.yaml` 配置文件模板
-            2. 根据需要修改配置：
-               - `bot.token` - Telegram Bot Token
-               - `subscription_api.api_key` - API 密钥
-               - `subscription_api.add_url` - 订阅 API 地址
-               - `monitor.channels` - 监听的频道 ID
-            
-            ### 🔐 校验和
-            
-            使用 `checksums.txt` 验证文件完整性：
-            ```bash
-            sha256sum -c checksums.txt
-            ```
-            
-            ### 📖 完整文档
-            
-            详见项目 README.md
+            ## ${{ steps.get_version.outputs.VERSION }}
           draft: false
           prerelease: false
         env:
