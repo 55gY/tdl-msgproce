@@ -10,7 +10,8 @@ bot:
   allowed_users: [403917294,6170578211]  # 例如: [123456789, 987654321]
   
   # 转发目标
-  forward_target: 1838605845  # 转发到这个 chat ID
+  # forward_target: 1838605845  # 转发到这个 chat ID
+  forward_target: 3583754045  # 转发到这个 chat ID
   
   # 转发模式
   forward_mode: "clone"  # clone 或 copy
@@ -27,6 +28,7 @@ monitor:
   # 获取历史消息功能
   features:
     fetch_history_count: 500  # 获取历史消息数量（>0 则开启并获取指定数量，<=0 则关闭功能）
+    auto_reclone_forwards: true  # 是否自动克隆 forward_target 频道的转发消息（去除转发头，避免来源频道封禁时内容失效）
 
   # 要监听的频道ID列表
   channels:

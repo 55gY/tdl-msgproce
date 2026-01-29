@@ -33,7 +33,8 @@ type MonitorConfig struct {
 	} `yaml:"subscription_api"`
 
 	Features struct {
-		FetchHistoryCount int `yaml:"fetch_history_count"` // 获取历史消息数量（>0开启，<=0关闭）
+		FetchHistoryCount   int  `yaml:"fetch_history_count"`   // 获取历史消息数量（>0开启，<=0关闭）
+		AutoRecloneForwards bool `yaml:"auto_reclone_forwards"` // 是否自动克隆 forward_target 频道的转发消息
 	} `yaml:"features"`
 
 	Channels          []int64 `yaml:"channels"`

@@ -119,6 +119,26 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 		msgType = "编辑消息"
 	}
 
+	// 【新功能】检查是否为 forward_target 频道的转发消息，自动克隆去除转发头
+	if p.config.Monitor.Features.AutoRecloneForwards && peerID == p.config.Bot.ForwardTarget {
+		if fwdInfo, ok := msg.GetFwdFrom(); ok {
+			// 检测到转发消息，执行克隆转发
+			p.ext.Log().Info("检测到转发消息，准备自动克隆",
+				zap.Int("message_id", msg.ID),
+				zap.Int64("channel_id", peerID))
+			
+			go func() {
+				if err := p.recloneForwardedMessage(context.Background(), msg, peerID, fwdInfo); err != nil {
+					p.ext.Log().Error("自动克隆转发消息失败",
+						zap.Int("message_id", msg.ID),
+						zap.Int64("channel_id", peerID),
+						zap.Error(err))
+				}
+			}()
+			// 继续正常处理消息（如果需要提取订阅链接等）
+		}
+	}
+
 	// 获取消息文本
 	text := msg.Message
 	if text == "" {
@@ -735,3 +755,169 @@ func matchAny(text string, patterns []string) bool {
 	return false
 }
 
+// recloneForwardedMessage 克隆转发消息（去除转发头）
+func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader) error {
+	// 提取转发来源信息（用于日志）
+	var forwardFrom string
+	if fromChannel, ok := fwdInfo.GetFromID(); ok {
+		if peerChannel, ok := fromChannel.(*tg.PeerChannel); ok {
+			forwardFrom = fmt.Sprintf("频道:%d", peerChannel.ChannelID)
+		} else if peerUser, ok := fromChannel.(*tg.PeerUser); ok {
+			forwardFrom = fmt.Sprintf("用户:%d", peerUser.UserID)
+		} else {
+			forwardFrom = "未知来源"
+		}
+	} else {
+		forwardFrom = "隐藏来源"
+	}
+
+	p.ext.Log().Info("开始克隆转发消息",
+		zap.Int("原消息ID", msg.ID),
+		zap.Int64("目标频道", channelID),
+		zap.String("转发来源", forwardFrom))
+
+	// 构造目标 InputPeer
+	inputPeer := &tg.InputPeerChannel{
+		ChannelID:  channelID,
+		AccessHash: 0, // 将尝试从缓存获取
+	}
+
+	// 准备发送消息的参数（克隆模式：复制文本和媒体，不保留转发信息）
+	sendRequest := &tg.MessagesSendMessageRequest{
+		Peer:    inputPeer,
+		Message: msg.Message,
+		NoWebpage: true, // 禁用网页预览，保持简洁
+	}
+
+	// 如果消息包含媒体，需要使用 SendMedia 而不是 SendMessage
+	if media, ok := msg.GetMedia(); ok {
+		// 处理媒体消息（照片、视频、文档等）
+		p.ext.Log().Info("消息包含媒体，使用媒体发送模式",
+			zap.Int("消息ID", msg.ID),
+			zap.String("媒体类型", fmt.Sprintf("%T", media)))
+
+		// 根据不同媒体类型构造 InputMedia
+		var inputMedia tg.InputMediaClass
+		
+		switch m := media.(type) {
+		case *tg.MessageMediaPhoto:
+			// 照片
+			if photo, ok := m.Photo.(*tg.Photo); ok {
+				inputMedia = &tg.InputMediaPhoto{
+					ID: &tg.InputPhoto{
+						ID:         photo.ID,
+						AccessHash: photo.AccessHash,
+						FileReference: photo.FileReference,
+					},
+				}
+			}
+		case *tg.MessageMediaDocument:
+			// 文档/视频/音频等
+			if doc, ok := m.Document.(*tg.Document); ok {
+				inputMedia = &tg.InputMediaDocument{
+					ID: &tg.InputDocument{
+						ID:         doc.ID,
+						AccessHash: doc.AccessHash,
+						FileReference: doc.FileReference,
+					},
+				}
+			}
+		default:
+			p.ext.Log().Warn("不支持的媒体类型，跳过克隆",
+				zap.String("类型", fmt.Sprintf("%T", media)))
+			return fmt.Errorf("不支持的媒体类型: %T", media)
+		}
+
+		if inputMedia != nil {
+			sendMediaRequest := &tg.MessagesSendMediaRequest{
+				Peer:    inputPeer,
+				Media:   inputMedia,
+				Message: msg.Message, // 保留原始文本
+			}
+
+			// 发送媒体消息
+			updates, err := p.api.MessagesSendMedia(ctx, sendMediaRequest)
+			if err != nil {
+				p.ext.Log().Error("克隆媒体消息失败",
+					zap.Int("原消息ID", msg.ID),
+					zap.Error(err))
+				return fmt.Errorf("发送媒体消息失败: %w", err)
+			}
+
+			p.ext.Log().Info("✅ 媒体消息克隆成功",
+				zap.Int("原消息ID", msg.ID),
+				zap.Int64("目标频道", channelID),
+				zap.String("转发来源", forwardFrom),
+				zap.Any("响应", updates))
+			
+			// 克隆成功后删除原始带转发头的消息
+			if err := p.deleteChannelMessage(ctx, channelID, msg.ID); err != nil {
+				p.ext.Log().Warn("删除原始转发消息失败（已成功克隆）",
+					zap.Int("原消息ID", msg.ID),
+					zap.Error(err))
+				// 不返回错误，因为克隆已经成功
+			} else {
+				p.ext.Log().Info("🗑️ 已删除原始转发消息",
+					zap.Int("消息ID", msg.ID),
+					zap.Int64("频道ID", channelID))
+			}
+			
+			return nil
+		}
+	}
+
+	// 发送纯文本消息
+	updates, err := p.api.MessagesSendMessage(ctx, sendRequest)
+	if err != nil {
+		p.ext.Log().Error("克隆文本消息失败",
+			zap.Int("原消息ID", msg.ID),
+			zap.Error(err))
+		return fmt.Errorf("发送文本消息失败: %w", err)
+	}
+
+	p.ext.Log().Info("✅ 文本消息克隆成功",
+		zap.Int("原消息ID", msg.ID),
+		zap.Int64("目标频道", channelID),
+		zap.String("转发来源", forwardFrom),
+		zap.Any("响应", updates))
+
+	// 克隆成功后删除原始带转发头的消息
+	if err := p.deleteChannelMessage(ctx, channelID, msg.ID); err != nil {
+		p.ext.Log().Warn("删除原始转发消息失败（已成功克隆）",
+			zap.Int("原消息ID", msg.ID),
+			zap.Error(err))
+		// 不返回错误，因为克隆已经成功
+	} else {
+		p.ext.Log().Info("🗑️ 已删除原始转发消息",
+			zap.Int("消息ID", msg.ID),
+			zap.Int64("频道ID", channelID))
+	}
+
+	return nil
+}
+
+// deleteChannelMessage 删除频道消息
+func (p *MessageProcessor) deleteChannelMessage(ctx context.Context, channelID int64, messageID int) error {
+	// 构造 InputChannel
+	inputChannel := &tg.InputChannel{
+		ChannelID:  channelID,
+		AccessHash: 0, // 将尝试从缓存获取
+	}
+
+	// 调用 ChannelsDeleteMessages API
+	deleteRequest := &tg.ChannelsDeleteMessagesRequest{
+		Channel: inputChannel,
+		ID:      []int{messageID},
+	}
+
+	affectedMessages, err := p.api.ChannelsDeleteMessages(ctx, deleteRequest)
+	if err != nil {
+		return fmt.Errorf("删除消息失败: %w", err)
+	}
+
+	p.ext.Log().Debug("删除消息API响应",
+		zap.Int("pts", affectedMessages.Pts),
+		zap.Int("pts_count", affectedMessages.PtsCount))
+
+	return nil
+}
