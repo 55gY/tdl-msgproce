@@ -18,6 +18,7 @@ import (
 func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) (int, int, error) {
 	peerID := getPeerID(msg.PeerID)
 
+
 	// 获取编辑时间（如果有）
 	editDate := 0
 	if date, ok := msg.GetEditDate(); ok {
@@ -120,16 +121,24 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 	}
 
 	// 【新功能】检查是否为 forward_target 频道的转发消息，自动克隆去除转发头
+	// 如果是 forward_target 频道，输出完整的原始消息结构
+	if peerID == p.config.Bot.ForwardTarget {
+		p.ext.Log().Info("📋 forward_target 频道收到消息",
+			zap.Int("message_id", msg.ID),
+			zap.Any("raw_message", msg))
+	}
+
 	if p.config.Monitor.Features.AutoRecloneForwards && peerID == p.config.Bot.ForwardTarget {
-		if fwdInfo, ok := msg.GetFwdFrom(); ok {
+		fwdInfo, hasFwdFrom := msg.GetFwdFrom()
+		if hasFwdFrom {
 			// 检测到转发消息，执行克隆转发
-			p.ext.Log().Info("检测到转发消息，准备自动克隆",
+			p.ext.Log().Info("✅ 检测到转发消息，准备自动克隆",
 				zap.Int("message_id", msg.ID),
 				zap.Int64("channel_id", peerID))
 			
 			go func() {
 				if err := p.recloneForwardedMessage(context.Background(), msg, peerID, fwdInfo); err != nil {
-					p.ext.Log().Error("自动克隆转发消息失败",
+					p.ext.Log().Error("❌ 自动克隆转发消息失败",
 						zap.Int("message_id", msg.ID),
 						zap.Int64("channel_id", peerID),
 						zap.Error(err))
