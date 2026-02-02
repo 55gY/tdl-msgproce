@@ -913,9 +913,6 @@ func (p *MessageProcessor) recloneForwardedMessageManual(ctx context.Context, ms
 	// 过滤消息实体，去除 Spoiler（文本剧透）- 无条件执行
 	filteredEntities := p.filterSpoilerEntities(msg.Entities)
 	
-	// 构建发送请求
-	var err error
-	
 	// 检查消息类型
 	if media, ok := msg.GetMedia(); ok {
 		// 包含媒体的消息（图片、视频等）- 去除媒体剧透
@@ -1032,7 +1029,6 @@ func (p *MessageProcessor) cloneInputMediaWithoutSpoiler(media tg.MessageMediaCl
 		}
 	}
 	
-	// 不支持的媒体类型，返回空
 	// 不支持的媒体类型，返回空
 	p.ext.Log().Warn("不支持的媒体类型，将仅发送文本",
 		zap.String("type", fmt.Sprintf("%T", media)))
