@@ -1028,52 +1028,24 @@ show_status() {
 
 # 查看日志
 view_logs() {
-    if [ ! -f "$LOG_PATH" ]; then
-        echo -e "${RED}日志文件不存在${NC}"
+    echo -e "${YELLOW}正在打开日志实时查看...${NC}"
+    echo -e "${CYAN}按 Ctrl+C 退出${NC}"
+    echo ""
+    sleep 1
+    
+    # 优先使用 systemd 日志（如果服务正在运行）
+    if systemctl is-active --quiet tdl-msgproce 2>/dev/null; then
+        journalctl -u tdl-msgproce -f
+    elif [ -f "$LOG_PATH" ]; then
+        tail -f "$LOG_PATH"
+    else
+        echo -e "${RED}未找到日志文件${NC}"
         echo ""
-        echo "如果使用 systemd 服务，查看日志:"
-        echo "  journalctl -u tdl-msgproce -f"
+        echo "可能原因："
+        echo "  1) 服务未启动"
+        echo "  2) 日志文件路径不存在: $LOG_PATH"
         return 1
     fi
-    
-    echo -e "${YELLOW}选择查看方式:${NC}"
-    echo "1) 最后 50 行"
-    echo "2) 最后 100 行"
-    echo "3) 实时查看 (tail -f)"
-    echo "4) 完整查看 (less)"
-    echo "5) systemd 日志"
-    echo ""
-    echo -n "请选择 [1-5]: "
-    read -r choice
-    
-    case $choice in
-        1)
-            tail -n 50 "$LOG_PATH"
-            ;;
-        2)
-            tail -n 100 "$LOG_PATH"
-            ;;
-        3)
-            echo -e "${YELLOW}按 Ctrl+C 退出${NC}"
-            sleep 1
-            tail -f "$LOG_PATH"
-            ;;
-        4)
-            less "$LOG_PATH"
-            ;;
-        5)
-            if systemctl list-units | grep -q tdl-msgproce; then
-                echo -e "${YELLOW}按 Ctrl+C 退出${NC}"
-                sleep 1
-                journalctl -u tdl-msgproce -f
-            else
-                echo -e "${RED}systemd 服务未运行${NC}"
-            fi
-            ;;
-        *)
-            echo -e "${RED}无效选择${NC}"
-            ;;
-    esac
 }
 
 # 编辑配置
