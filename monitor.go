@@ -131,13 +131,42 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 	if p.config.Monitor.Features.AutoRecloneForwards && peerID == p.config.Bot.ForwardTarget {
 		fwdInfo, hasFwdFrom := msg.GetFwdFrom()
 		if hasFwdFrom {
-			// 检测到转发消息，执行克隆转发
-			p.ext.Log().Info("✅ 检测到转发消息，准备自动克隆",
-				zap.Int("message_id", msg.ID),
-				zap.Int64("channel_id", peerID))
+			// 检查是否为消息集合（Media Group/Album）
+			groupedID, hasGroupedID := msg.GetGroupedID()
+			
+			if hasGroupedID {
+				// 这是消息集合的一部分，使用 groupedID 作为唯一标识来去重
+				// 将 groupedID 转换为 int 类型用于缓存
+				groupIDInt := int(groupedID)
+				
+				// 检查是否已处理过此消息集合
+				if p.messageCache.Has(peerID, groupIDInt) {
+					// 此消息集合已处理过，跳过
+					p.ext.Log().Debug("消息集合已处理，跳过",
+						zap.Int("message_id", msg.ID),
+						zap.Int64("grouped_id", groupedID),
+						zap.Int64("channel_id", peerID))
+					return 0, 0, nil
+				}
+				
+				// 标记此消息集合已处理（使用 groupedID 作为缓存键）
+				p.messageCache.Add(peerID, groupIDInt, 0)
+				
+				p.ext.Log().Info("✅ 检测到转发消息集合，准备自动克隆",
+					zap.Int("message_id", msg.ID),
+					zap.Int64("grouped_id", groupedID),
+					zap.Int64("channel_id", peerID),
+					zap.String("info", "仅处理集合第一条消息"))
+			} else {
+				// 单条消息
+				p.ext.Log().Info("✅ 检测到转发消息，准备自动克隆",
+					zap.Int("message_id", msg.ID),
+					zap.Int64("channel_id", peerID))
+			}
 			
 			go func() {
-				if err := p.recloneForwardedMessage(context.Background(), msg, peerID, fwdInfo); err != nil {
+				// 使用手动克隆模式（默认去除剧透效果）
+				if err := p.recloneForwardedMessageManual(context.Background(), msg, peerID, fwdInfo); err != nil {
 					p.ext.Log().Error("❌ 自动克隆转发消息失败",
 						zap.Int("message_id", msg.ID),
 						zap.Int64("channel_id", peerID),
@@ -805,7 +834,8 @@ func (p *MessageProcessor) getChannelAccessHash(ctx context.Context, channelID i
 	return accessHash, nil
 }
 
-func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader) error {
+// recloneForwardedMessageTDL 使用 tdl 库转发消息（已弃用，保留待测试后删除）
+func (p *MessageProcessor) recloneForwardedMessageTDL(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader) error {
 	// 构造消息链接（私有频道格式）
 	msgLink := fmt.Sprintf("https://t.me/c/%d/%d", channelID, msg.ID)
 	
@@ -860,4 +890,150 @@ func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.
 	}
 	
 	return nil
+
+// recloneForwardedMessageManual 手动克隆转发消息（默认去除转发头和剧透效果）
+func (p *MessageProcessor) recloneForwardedMessageManual(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader) error {
+	p.ext.Log().Info("开始克隆转发消息（手动模式，去除剧透）",
+		zap.Int("原消息ID", msg.ID),
+		zap.Int64("频道ID", channelID))
+	
+	// 获取频道的 AccessHash
+	accessHash, err := p.getChannelAccessHash(ctx, channelID)
+	if err != nil {
+		return fmt.Errorf("获取频道 AccessHash 失败: %w", err)
+	}
+	
+	// 准备频道 InputPeer
+	inputPeer := &tg.InputPeerChannel{
+		ChannelID:  channelID,
+		AccessHash: accessHash,
+	}
+	
+	// 过滤消息实体，去除 Spoiler（文本剧透）- 无条件执行
+	filteredEntities := p.filterSpoilerEntities(msg.Entities)
+	
+	// 构建发送请求
+	var sendResult tg.UpdatesClass
+	
+	// 检查消息类型
+	if media, ok := msg.GetMedia(); ok {
+		// 包含媒体的消息（图片、视频等）- 去除媒体剧透
+		sendResult, err = p.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+			Peer:     inputPeer,
+			Media:    p.cloneInputMediaWithoutSpoiler(media), // 无条件去除剧透
+			Message:  msg.Message,
+			Entities: filteredEntities,
+		})
+	} else {
+		// 纯文本消息
+		sendResult, err = p.api.MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:     inputPeer,
+			Message:  msg.Message,
+			Entities: filteredEntities,
+		})
+	}
+	
+	if err != nil {
+		return fmt.Errorf("重新发送消息失败: %w", err)
+	}
+	
+	p.ext.Log().Info("✅ 克隆转发成功（已去除转发头和剧透）",
+		zap.Int("原消息ID", msg.ID),
+		zap.Int64("频道ID", channelID))
+	
+	// 删除原始带转发头的消息
+	deleteRequest := &tg.ChannelsDeleteMessagesRequest{
+		Channel: &tg.InputChannel{
+			ChannelID:  channelID,
+			AccessHash: accessHash,
+		},
+		ID: []int{msg.ID},
+	}
+	
+	affectedMessages, err := p.api.ChannelsDeleteMessages(ctx, deleteRequest)
+	if err != nil {
+		p.ext.Log().Warn("删除原始转发消息失败（已成功克隆）",
+			zap.Int("原消息ID", msg.ID),
+			zap.Int64("频道ID", channelID),
+			zap.Error(err))
+	} else {
+		p.ext.Log().Info("🗑️ 已删除原始转发消息",
+			zap.Int("消息ID", msg.ID),
+			zap.Int64("频道ID", channelID),
+			zap.Int("pts", affectedMessages.Pts),
+			zap.Int("count", affectedMessages.PtsCount))
+	}
+	
+	return nil
+}
+
+// filterSpoilerEntities 过滤掉 Spoiler 类型的实体（文本剧透）
+func (p *MessageProcessor) filterSpoilerEntities(entities []tg.MessageEntityClass) []tg.MessageEntityClass {
+	if len(entities) == 0 {
+		return entities
+	}
+	
+	filtered := make([]tg.MessageEntityClass, 0, len(entities))
+	spoilerCount := 0
+	
+	for _, entity := range entities {
+		// 检查是否为 Spoiler 类型
+		if _, isSpoiler := entity.(*tg.MessageEntitySpoiler); isSpoiler {
+			spoilerCount++
+			continue // 跳过剧透实体
+		}
+		filtered = append(filtered, entity)
+	}
+	
+	if spoilerCount > 0 {
+		p.ext.Log().Info("已过滤文本剧透实体",
+			zap.Int("过滤数量", spoilerCount),
+			zap.Int("保留数量", len(filtered)))
+	}
+	
+	return filtered
+}
+
+// cloneInputMediaWithoutSpoiler 克隆媒体对象为 InputMedia，并去除剧透标记
+func (p *MessageProcessor) cloneInputMediaWithoutSpoiler(media tg.MessageMediaClass) tg.InputMediaClass {
+	switch m := media.(type) {
+	case *tg.MessageMediaPhoto:
+		if photo, ok := m.Photo.(*tg.Photo); ok {
+			// 检查原消息是否有剧透标记
+			if m.Spoiler {
+				p.ext.Log().Info("检测到图片剧透，已去除")
+			}
+			
+			return &tg.InputMediaPhoto{
+				ID: &tg.InputPhoto{
+					ID:            photo.ID,
+					AccessHash:    photo.AccessHash,
+					FileReference: photo.FileReference,
+				},
+				Spoiler: false, // 强制设为 false，去除剧透效果
+			}
+		}
+	case *tg.MessageMediaDocument:
+		if doc, ok := m.Document.(*tg.Document); ok {
+			// 检查原消息是否有剧透标记
+			if m.Spoiler {
+				p.ext.Log().Info("检测到视频/文档剧透，已去除")
+			}
+			
+			return &tg.InputMediaDocument{
+				ID: &tg.InputDocument{
+					ID:            doc.ID,
+					AccessHash:    doc.AccessHash,
+					FileReference: doc.FileReference,
+				},
+				Spoiler: false, // 强制设为 false，去除剧透效果
+			}
+		}
+	}
+	
+	// 不支持的媒体类型，返回空
+	p.ext.Log().Warn("不支持的媒体类型，将仅发送文本",
+		zap.String("type", fmt.Sprintf("%T", media)))
+	return &tg.InputMediaEmpty{}
+}
 }
