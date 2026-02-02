@@ -914,12 +914,12 @@ func (p *MessageProcessor) recloneForwardedMessageManual(ctx context.Context, ms
 	filteredEntities := p.filterSpoilerEntities(msg.Entities)
 	
 	// 构建发送请求
-	var sendResult tg.UpdatesClass
+	var err error
 	
 	// 检查消息类型
 	if media, ok := msg.GetMedia(); ok {
 		// 包含媒体的消息（图片、视频等）- 去除媒体剧透
-		sendResult, err = p.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+		_, err = p.api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 			Peer:     inputPeer,
 			Media:    p.cloneInputMediaWithoutSpoiler(media), // 无条件去除剧透
 			Message:  msg.Message,
@@ -927,7 +927,7 @@ func (p *MessageProcessor) recloneForwardedMessageManual(ctx context.Context, ms
 		})
 	} else {
 		// 纯文本消息
-		sendResult, err = p.api.MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+		_, err = p.api.MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
 			Peer:     inputPeer,
 			Message:  msg.Message,
 			Entities: filteredEntities,
