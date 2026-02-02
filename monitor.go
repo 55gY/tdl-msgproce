@@ -765,6 +765,46 @@ func matchAny(text string, patterns []string) bool {
 }
 
 // recloneForwardedMessage 克隆转发消息（去除转发头）
+// getChannelAccessHash 获取频道的 AccessHash
+func (p *MessageProcessor) getChannelAccessHash(ctx context.Context, channelID int64) (int64, error) {
+	dialogs, err := p.api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+		OffsetDate: 0,
+		OffsetID:   0,
+		OffsetPeer: &tg.InputPeerEmpty{},
+		Limit:      100,
+		Hash:       0,
+	})
+
+	if err != nil {
+		return 0, fmt.Errorf("获取对话列表失败: %w", err)
+	}
+
+	// 查找对应的频道
+	var accessHash int64
+	switch d := dialogs.(type) {
+	case *tg.MessagesDialogs:
+		for _, chat := range d.Chats {
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelID {
+				accessHash = ch.AccessHash
+				break
+			}
+		}
+	case *tg.MessagesDialogsSlice:
+		for _, chat := range d.Chats {
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelID {
+				accessHash = ch.AccessHash
+				break
+			}
+		}
+	}
+
+	if accessHash == 0 {
+		return 0, fmt.Errorf("未找到频道 %d 的 AccessHash", channelID)
+	}
+
+	return accessHash, nil
+}
+
 func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader) error {
 	// 构造消息链接（私有频道格式）
 	msgLink := fmt.Sprintf("https://t.me/c/%d/%d", channelID, msg.ID)
@@ -775,7 +815,8 @@ func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.
 		zap.String("消息链接", msgLink))
 	
 	// 使用现有的 forwardFromLink 方法，配置中的 forward_mode 已设为 clone
-	if err := p.forwardFromLink(ctx, msgLink, &channelID, nil); err != nil {
+	// Single 设为 false 以提高批量转发效率
+	if err := p.forwardFromLink(ctx, msgLink, &channelID, nil, false); err != nil {
 		return fmt.Errorf("克隆转发失败: %w", err)
 	}
 	
@@ -784,22 +825,38 @@ func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.
 		zap.Int64("频道ID", channelID))
 	
 	// 克隆成功后删除原始带转发头的消息
-	deleteRequest := &tg.MessagesDeleteMessagesRequest{
-		Revoke: true, // 对所有人删除
-		ID:     []int{msg.ID},
+	// 获取频道的 AccessHash
+	accessHash, err := p.getChannelAccessHash(ctx, channelID)
+	if err != nil {
+		p.ext.Log().Warn("获取频道 AccessHash 失败（已成功克隆）",
+			zap.Int("原消息ID", msg.ID),
+			zap.Int64("频道ID", channelID),
+			zap.Error(err))
+		return nil // 不返回错误，因为克隆已经成功
 	}
 	
-	affectedMessages, err := p.api.MessagesDeleteMessages(ctx, deleteRequest)
+	// 使用 ChannelsDeleteMessages API 删除频道消息
+	deleteRequest := &tg.ChannelsDeleteMessagesRequest{
+		Channel: &tg.InputChannel{
+			ChannelID:  channelID,
+			AccessHash: accessHash,
+		},
+		ID: []int{msg.ID},
+	}
+	
+	affectedMessages, err := p.api.ChannelsDeleteMessages(ctx, deleteRequest)
 	if err != nil {
 		p.ext.Log().Warn("删除原始转发消息失败（已成功克隆）",
 			zap.Int("原消息ID", msg.ID),
+			zap.Int64("频道ID", channelID),
 			zap.Error(err))
 		// 不返回错误，因为克隆已经成功
 	} else {
 		p.ext.Log().Info("🗑️ 已删除原始转发消息",
 			zap.Int("消息ID", msg.ID),
 			zap.Int64("频道ID", channelID),
-			zap.Int("pts", affectedMessages.Pts))
+			zap.Int("pts", affectedMessages.Pts),
+			zap.Int("count", affectedMessages.PtsCount))
 	}
 	
 	return nil

@@ -125,7 +125,8 @@ func (pw *progressWriter) Write(p []byte) (n int, err error) {
 // - https://t.me/c/1234567890/123
 // - @channel_username
 // target: 可选的转发目标 ID，为 nil 时使用配置文件中的默认目标
-func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, target *int64, onProgress func(int, string)) error {
+// single: 是否单条模式，true 时逐条转发，false 时批量转发
+func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, target *int64, onProgress func(int, string), single bool) error {
 	p.ext.Log().Info("开始转发", zap.String("link", link))
 
 	// 确定转发目标
@@ -155,7 +156,7 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 			Mode:   mode,                      // 转发模式：clone(克隆) 或 direct(直接转发)
 			Silent: false,                     // 是否静默转发：true 时不通知接收者
 			DryRun: false,                     // 是否空运行：true 时仅模拟不实际执行
-			Single: true,                      // 是否单条模式：true 时逐条转发
+			Single: single,                    // 是否单条模式：true 时逐条转发，false 时批量转发
 			Desc:   false,                     // 是否降序
 		}
 		client := p.ext.Client()
@@ -218,7 +219,7 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 		Mode:   mode,                      // 转发模式：clone(克隆) 或 direct(直接转发)
 		Silent: false,                     // 是否静默转发：true 时不通知接收者
 		DryRun: false,                     // 是否空运行：true 时仅模拟不实际执行
-		Single: true,                      // 是否单条模式：true 时逐条转发
+		Single: single,                    // 是否单条模式：true 时逐条转发，false 时批量转发
 		Desc:   false,                     // 是否降序
 	}
 
