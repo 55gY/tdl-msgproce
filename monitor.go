@@ -121,15 +121,23 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 	}
 
 	// 【新功能】检查是否为 forward_target 频道的转发消息，自动克隆去除转发头
-	// 如果是 forward_target 频道，输出完整的原始消息结构
-	// if peerID == p.config.Bot.ForwardTarget {
-	// 	p.ext.Log().Info("📋 forward_target 频道收到消息",
-	// 		zap.Int("message_id", msg.ID),
-	// 		zap.Any("raw_message", msg))
-	// }
+	// 调试日志：检查是否进入 auto_reclone 逻辑
+	if peerID == p.config.Bot.ForwardTarget {
+		p.ext.Log().Info("🔍 forward_target 频道收到消息",
+			zap.Int("message_id", msg.ID),
+			zap.Int64("channel_id", peerID),
+			zap.Bool("auto_reclone_enabled", p.config.Monitor.Features.AutoRecloneForwards))
+	}
 
 	if p.config.Monitor.Features.AutoRecloneForwards && peerID == p.config.Bot.ForwardTarget {
 		fwdInfo, hasFwdFrom := msg.GetFwdFrom()
+		
+		// 调试日志：检查是否有转发头
+		p.ext.Log().Info("🔍 检查转发头",
+			zap.Int("message_id", msg.ID),
+			zap.Bool("has_fwd_from", hasFwdFrom),
+			zap.Any("fwd_info", fwdInfo))
+		
 		if hasFwdFrom {
 			// 检查是否为消息集合（Media Group/Album）
 			groupedID, hasGroupedID := msg.GetGroupedID()
