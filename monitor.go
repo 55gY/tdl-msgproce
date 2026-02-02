@@ -890,6 +890,7 @@ func (p *MessageProcessor) recloneForwardedMessageTDL(ctx context.Context, msg *
 	}
 	
 	return nil
+}
 
 // recloneForwardedMessageManual 手动克隆转发消息（默认去除转发头和剧透效果）
 func (p *MessageProcessor) recloneForwardedMessageManual(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader) error {
@@ -1032,8 +1033,9 @@ func (p *MessageProcessor) cloneInputMediaWithoutSpoiler(media tg.MessageMediaCl
 	}
 	
 	// 不支持的媒体类型，返回空
+	// 不支持的媒体类型，返回空
 	p.ext.Log().Warn("不支持的媒体类型，将仅发送文本",
 		zap.String("type", fmt.Sprintf("%T", media)))
 	return &tg.InputMediaEmpty{}
 }
-}
+
