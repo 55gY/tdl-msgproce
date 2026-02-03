@@ -19,6 +19,20 @@ import (
 	"github.com/gotd/td/tg"
 )
 
+// SubscriptionResponse 订阅API响应结构
+type SubscriptionResponse struct {
+	Message     string `json:"message"`
+	Error       string `json:"error"`
+	SubURL      string `json:"sub_url"`
+	TestedNodes *int   `json:"tested_nodes,omitempty"`
+	PassedNodes *int   `json:"passed_nodes,omitempty"`
+	FailedNodes *int   `json:"failed_nodes,omitempty"`
+	AddedNodes  *int   `json:"added_nodes,omitempty"`
+	Duration    string `json:"duration,omitempty"`
+	Timeout     *bool  `json:"timeout,omitempty"`
+	Warning     string `json:"warning,omitempty"`
+}
+
 // handleMessage 处理新消息（非编辑），返回 (有效订阅数, 有效节点数, error)
 func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) (int, int, error) {
 	peerID := getPeerID(msg.PeerID)
@@ -89,11 +103,8 @@ func (p *MessageProcessor) handleEditMessage(ctx context.Context, msg *tg.Messag
 	}
 
 	// 打印调试日志
-	editLabel := "首次编辑"
-	if isEdit {
-		editLabel = "再次编辑"
-	}
-	// fmt.Printf("[DEBUG] 处理编辑消息 (id=%d, channel_id=%d, edit_date=%d, edit_type=%s, content=%.50s)\n", msg.ID, peerID, editDate, editLabel, msg.Message)
+	_ = isEdit
+	// fmt.Printf("[DEBUG] 处理编辑消息 (id=%d, channel_id=%d, edit_date=%d, content=%.50s)\n", msg.ID, peerID, editDate, msg.Message)
 	fmt.Printf("📨 收到新消息[编辑]: ID=%d, 频道=%d, 内容=\"%.50s...\"\n",
 		msg.ID, peerID, msg.Message)
 
@@ -309,18 +320,7 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 							// fmt.Printf("[DEBUG] 读取响应失败: %v\n", err)
 						} else {
 							// 记录原始响应（用于调试）
-						// fmt.Printf("[DEBUG] 批量节点API 响应 (status=%d, body=%s)\n", resp.StatusCode, string(body))
-								Message     string `json:"message"`
-								Error       string `json:"error"`
-								SubURL      string `json:"sub_url"`
-								TestedNodes *int   `json:"tested_nodes,omitempty"`
-								PassedNodes *int   `json:"passed_nodes,omitempty"`
-								FailedNodes *int   `json:"failed_nodes,omitempty"`
-								AddedNodes  *int   `json:"added_nodes,omitempty"`
-								Duration    string `json:"duration,omitempty"`
-								Timeout     *bool  `json:"timeout,omitempty"`
-								Warning     string `json:"warning,omitempty"`
-							}
+							// fmt.Printf("[DEBUG] 批量节点API 响应 (status=%d, body=%s)\n", resp.StatusCode, string(body))
 
 							var response SubscriptionResponse
 							if err := json.Unmarshal(body, &response); err != nil {
@@ -446,19 +446,6 @@ func (p *MessageProcessor) addSubscription(link string) error {
 	// fmt.Printf("[DEBUG] API 响应 (type=%s, status=%d, body=%s)\n", linkType, resp.StatusCode, string(body))
 
 	// 解析响应
-	type SubscriptionResponse struct {
-		Message     string `json:"message"`
-		Error       string `json:"error"`
-		SubURL      string `json:"sub_url"`
-		TestedNodes *int   `json:"tested_nodes,omitempty"`
-		PassedNodes *int   `json:"passed_nodes,omitempty"`
-		FailedNodes *int   `json:"failed_nodes,omitempty"`
-		AddedNodes  *int   `json:"added_nodes,omitempty"`
-		Duration    string `json:"duration,omitempty"`
-		Timeout     *bool  `json:"timeout,omitempty"`
-		Warning     string `json:"warning,omitempty"`
-	}
-
 	var response SubscriptionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		// fmt.Printf("[DEBUG] 解析响应失败 (error=%v, body=%s, status=%d)\n", err, string(body), resp.StatusCode)

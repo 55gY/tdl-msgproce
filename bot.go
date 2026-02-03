@@ -703,20 +703,6 @@ type SubscriptionRequest struct {
 	Test   bool   `json:"test"`
 }
 
-// SubscriptionResponse 订阅响应结构
-type SubscriptionResponse struct {
-	Message     string `json:"message"`
-	Error       string `json:"error"`
-	SubURL      string `json:"sub_url"`
-	TestedNodes *int   `json:"tested_nodes,omitempty"`
-	PassedNodes *int   `json:"passed_nodes,omitempty"`
-	FailedNodes *int   `json:"failed_nodes,omitempty"`
-	AddedNodes  *int   `json:"added_nodes,omitempty"`
-	Duration    string `json:"duration,omitempty"`
-	Timeout     *bool  `json:"timeout,omitempty"`
-	Warning     string `json:"warning,omitempty"`
-}
-
 // addSubscriptionToAPI 添加订阅或节点到 API
 func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool, string) {
 	if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
@@ -895,7 +881,17 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 				errorMsg = "该订阅链接已存在"
 			}
 		}
-	// fmt.Printf("[DEBUG] %s已存在 (link=%s)\n", linkType, link)
+		// fmt.Printf("[DEBUG] %s已存在 (link=%s)\n", linkType, link)
+		return false, fmt.Sprintf("⚠️ %s", errorMsg)
+	}
+
+	// 处理服务器错误（500+）
+	if resp.StatusCode >= 500 {
+		errorMsg := response.Error
+		if errorMsg == "" {
+			errorMsg = response.Message
+		}
+		if errorMsg == "" {
 			errorMsg = fmt.Sprintf("服务器错误 (状态码: %d)", resp.StatusCode)
 		}
 		fmt.Printf("❌ %s服务器错误 (link=%s, status=%d, error=%s)\n", linkType, link, resp.StatusCode, errorMsg)
