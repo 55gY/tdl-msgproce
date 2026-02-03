@@ -12,6 +12,7 @@ type Config struct {
 	Bot     BotConfig     `yaml:"bot"`
 	Monitor MonitorConfig `yaml:"monitor"`
 	Proxy   ProxyConfig   `yaml:"proxy"`
+	CheckIn CheckInConfig `yaml:"checkin"`
 }
 
 // BotConfig Telegram Bot 配置
@@ -56,6 +57,19 @@ type ProxyConfig struct {
 	Token         string `yaml:"token"`          // 访问 Token
 	Timeout       int    `yaml:"timeout"`        // 请求超时时间（秒）
 	MaxConcurrent int    `yaml:"max_concurrent"` // 最大并发请求数
+}
+
+// CheckInConfig 定时签到配置
+type CheckInConfig struct {
+	Enabled bool          `yaml:"enabled"` // 是否启用定时签到功能
+	Tasks   []CheckInTask `yaml:"tasks"`   // 签到任务列表
+}
+
+// CheckInTask 单个签到任务
+type CheckInTask struct {
+	Bot     int64  `yaml:"bot"`     // 机器人用户ID
+	Message string `yaml:"message"` // 签到消息内容
+	Cron    string `yaml:"cron"`    // Cron表达式（分 时 日 月 周）
 }
 
 // loadConfig 加载配置文件

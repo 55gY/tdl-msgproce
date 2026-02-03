@@ -8,11 +8,12 @@
 
 ## 📦 项目简介
 
-`tdl-msgproce` 是 [tdl](https://github.com/iyear/tdl) 的扩展程序，集成三大核心功能：
+`tdl-msgproce` 是 [tdl](https://github.com/iyear/tdl) 的扩展程序，集成四大核心功能：
 
 1. **消息监听** - 实时监听 Telegram 频道，智能过滤并提交到订阅 API
 2. **Bot 交互** - Telegram Bot 支持，接收和处理用户命令
 3. **消息转发** - 自动转发频道消息到指定目标（支持 clone/copy 模式）
+4. **定时签到** - 自动向指定机器人发送签到消息（支持 cron 表达式定时）
 
 ### ✨ 核心特性
 
@@ -112,7 +113,23 @@ chmod +x install.sh
 - ✅ copy 模式：简单复制
 - ✅ 统一转发到指定目标聊天
 
-### 4. 融合优势 🎯
+### 4. 定时签到功能 🕐
+
+- ✅ **多机器人支持** - 可配置多个签到任务
+- ✅ **Cron 表达式** - 标准 5 段式定时（分 时 日 月 周）
+- ✅ **灵活调度** - 支持 `*`、`*/n`、`n-m`、逗号分隔等语法
+- ✅ **自动执行** - 无需人工干预，定时自动签到
+- ✅ **防重复执行** - 同一分钟内不会重复触发
+- ✅ **详细日志** - 记录每次签到的执行情况
+- ✅ **独立服务** - 作为第4个独立服务运行，不影响其他功能
+
+**Cron 表达式示例：**
+- `0 1 * * *` - 每天凌晨 1:00
+- `30 8 * * *` - 每天早上 8:30
+- `0 */6 * * *` - 每 6 小时执行一次
+- `0 9 * * 1` - 每周一早上 9:00
+
+### 5. 融合优势 🎯
 
 - ✅ 不需要多个 tdl 进程
 - ✅ 避免 BoltDB session 文件锁冲突
@@ -120,7 +137,7 @@ chmod +x install.sh
 - ✅ 统一的配置文件和日志输出
 - ✅ 自动化安装和管理脚本
 
-### 5. 代码架构优化 🔧
+### 6. 代码架构优化 🔧
 
 #### 最新重构（2026-01）
 
@@ -478,6 +495,18 @@ monitor:
       - ".webp"
       - ".bmp"
       - "go1.569521.xyz"
+
+# ==================== 定时签到配置 ====================
+checkin:
+  enabled: true
+  tasks:
+    - bot: 7983923821
+      message: '\qd'
+      cron: '0 1 * * *'    # 每天凌晨1:00
+    
+    - bot: 1234567890
+      message: '/checkin'
+      cron: '30 8 * * *'   # 每天早上8:30
 ```
 
 ### 不同使用场景配置
@@ -522,6 +551,40 @@ monitor:
   filters:
     subs: ["https://"]
     ss: ["vmess://", "ss://"]
+```
+
+**场景4：仅定时签到**
+```yaml
+bot:
+  enabled: false
+
+monitor:
+  enabled: false
+
+checkin:
+  enabled: true
+  tasks:
+    - bot: 7983923821
+      message: '\qd'
+      cron: '0 1 * * *'
+```
+
+**场景5：全功能启用**
+```yaml
+bot:
+  enabled: true
+  token: "YOUR_BOT_TOKEN"
+
+monitor:
+  enabled: true
+  channels: [123456]
+
+checkin:
+  enabled: true
+  tasks:
+    - bot: 7983923821
+      message: '\qd'
+      cron: '0 1 * * *'
 ```
 
 ## 🛠️ 管理脚本

@@ -67,7 +67,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 	processor.RegisterHandlers(dispatcher)
 
 	// 启动后台服务
-	errChan := make(chan error, 2)
+	errChan := make(chan error, 4)
 	activeServices := 0
 
 	if config.Monitor.Enabled {
@@ -92,6 +92,14 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 		proxyServer := NewProxyServer(&config.Proxy)
 		go func() {
 			errChan <- proxyServer.Start(ctx)
+		}()
+	}
+
+	if config.CheckIn.Enabled && len(config.CheckIn.Tasks) > 0 {
+		ext.Log().Info("🕐 启动定时签到服务...", zap.Int("tasks", len(config.CheckIn.Tasks)))
+		activeServices++
+		go func() {
+			errChan <- processor.StartCheckInScheduler(ctx)
 		}()
 	}
 
