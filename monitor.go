@@ -123,7 +123,7 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 	// 【新功能】检查是否为 forward_target 频道的转发消息，自动克隆去除转发头
 	// 如果是 forward_target 频道，输出完整的原始消息结构
 	// if peerID == p.config.Bot.ForwardTarget {
-	// 	p.ext.Log().Info("� forward_target 频道收到消息",
+	// 	p.ext.Log().Info("📋 forward_target 频道收到消息",
 	// 		zap.Int("message_id", msg.ID),
 	// 		zap.Any("raw_message", msg))
 	// }
@@ -135,43 +135,64 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 			groupedID, hasGroupedID := msg.GetGroupedID()
 			
 			if hasGroupedID {
-				// 这是消息集合的一部分，使用 groupedID 作为唯一标识来去重
-				// 将 groupedID 转换为 int 类型用于缓存
+				// 这是消息集合的一部分
+				// 使用 groupedID 作为唯一标识
 				groupIDInt := int(groupedID)
 				
-				// 检查是否已处理过此消息集合
+				// 检查是否已经在处理队列中
 				if p.messageCache.Has(peerID, groupIDInt) {
-					// 此消息集合已处理过，跳过
-					p.ext.Log().Debug("消息集合已处理，跳过",
+					// 此消息集合已标记处理，跳过
+					p.ext.Log().Debug("消息集合已在处理队列，跳过",
 						zap.Int("message_id", msg.ID),
 						zap.Int64("grouped_id", groupedID),
 						zap.Int64("channel_id", peerID))
 					return 0, 0, nil
 				}
 				
-				// 标记此消息集合已处理（使用 groupedID 作为缓存键）
+				// 标记此消息集合为处理中
 				p.messageCache.Add(peerID, groupIDInt, 0)
 				
-				p.ext.Log().Info("✅ 检测到转发消息集合，准备自动克隆",
+				p.ext.Log().Info("✅ 检测到转发消息集合",
 					zap.Int("message_id", msg.ID),
 					zap.Int64("grouped_id", groupedID),
 					zap.Int64("channel_id", peerID),
-					zap.String("info", "仅处理集合第一条消息"))
+					zap.String("info", "延迟2秒后处理"))
+				
+				// 延迟处理：等待消息集合的所有消息到达
+				go func() {
+					// 等待2秒，确保集合中的所有消息都已到达
+					time.Sleep(2 * time.Second)
+					
+					p.ext.Log().Info("开始处理消息集合",
+						zap.Int("message_id", msg.ID),
+						zap.Int64("grouped_id", groupedID))
+					
+					if err := p.recloneForwardedMessage(context.Background(), msg, peerID, fwdInfo); err != nil {
+						p.ext.Log().Error("❌ 自动克隆转发消息失败",
+							zap.Int("message_id", msg.ID),
+							zap.Int64("grouped_id", groupedID),
+							zap.Int64("channel_id", peerID),
+							zap.Error(err))
+					}
+				}()
+				
+				// 跳过后续处理（不提取订阅链接等）
+				return 0, 0, nil
 			} else {
-				// 单条消息
+				// 单条消息，立即处理
 				p.ext.Log().Info("✅ 检测到转发消息，准备自动克隆",
 					zap.Int("message_id", msg.ID),
 					zap.Int64("channel_id", peerID))
+				
+				go func() {
+					if err := p.recloneForwardedMessage(context.Background(), msg, peerID, fwdInfo); err != nil {
+						p.ext.Log().Error("❌ 自动克隆转发消息失败",
+							zap.Int("message_id", msg.ID),
+							zap.Int64("channel_id", peerID),
+							zap.Error(err))
+					}
+				}()
 			}
-			
-			go func() {
-				if err := p.recloneForwardedMessage(context.Background(), msg, peerID, fwdInfo); err != nil {
-					p.ext.Log().Error("❌ 自动克隆转发消息失败",
-						zap.Int("message_id", msg.ID),
-						zap.Int64("channel_id", peerID),
-						zap.Error(err))
-				}
-			}()
 			// 继续正常处理消息（如果需要提取订阅链接等）
 		}
 	}
