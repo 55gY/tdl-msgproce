@@ -1,3 +1,10 @@
+// tdl-msgproce - 消息转发功能核心实现
+// 
+// 日志输出规范：
+// - 使用 fmt.Printf() 输出用户可见的日志信息
+// - 调试日志使用 // fmt.Printf() 注释格式
+// - 不使用 zap 日志库
+
 package main
 
 import (
@@ -14,7 +21,6 @@ import (
 	"github.com/iyear/tdl/app/forward"
 	"github.com/iyear/tdl/core/forwarder"
 	"github.com/iyear/tdl/core/storage"
-	"go.uber.org/zap"
 )
 
 // memoryStorage 简单的内存 storage 实现
@@ -127,7 +133,7 @@ func (pw *progressWriter) Write(p []byte) (n int, err error) {
 // target: 可选的转发目标 ID，为 nil 时使用配置文件中的默认目标
 // single: 是否单条模式，true 时逐条转发，false 时批量转发
 func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, target *int64, onProgress func(int, string), single bool) error {
-	p.ext.Log().Info("开始转发", zap.String("link", link))
+	fmt.Printf("✅ 开始转发 (link=%s)\n", link)
 
 	// 确定转发目标
 	var targetID int64
@@ -163,7 +169,7 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 		if err := forward.Run(ctx, client, kvd, opts); err != nil {
 			return fmt.Errorf("转发失败: %w", err)
 		}
-		p.ext.Log().Info("转发成功", zap.String("link", link))
+		fmt.Printf("✅ 转发成功 (link=%s)\n", link)
 		return nil
 	}
 
@@ -237,7 +243,7 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 		return fmt.Errorf("转发失败: %w", err)
 	}
 
-	p.ext.Log().Info("转发成功", zap.String("link", link), zap.Int64("target", targetID))
+	fmt.Printf("✅ 转发成功 (link=%s, target=%d)\n", link, targetID)
 	return nil
 }
 
@@ -281,10 +287,7 @@ func (p *MessageProcessor) parseJSONMessages(jsonFilePath string) ([]string, err
 		return nil, fmt.Errorf("未找到任何可转发的消息")
 	}
 
-	p.ext.Log().Info("解析 JSON 完成", 
-		zap.String("file", jsonFilePath), 
-		zap.Int64("channelID", channelID),
-		zap.Int("messageCount", len(links)))
+	fmt.Printf("✅ 解析 JSON 完成 (file=%s, channelID=%d, messageCount=%d)\n", jsonFilePath, channelID, len(links))
 
 	return links, nil
 }

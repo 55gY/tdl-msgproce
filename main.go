@@ -1,3 +1,9 @@
+// tdl-msgproce - Telegram 消息处理扩展
+// 
+// 日志输出规范：
+// - 使用 fmt.Printf() 输出用户可见的日志信息
+// - 调试日志使用 // fmt.Printf() 注释格式
+// - 不使用 zap 日志库
 package main
 
 import (
@@ -6,8 +12,6 @@ import (
 	"path/filepath"
 
 	"github.com/gotd/td/tg"
-	"go.uber.org/zap"
-
 	"github.com/iyear/tdl/extension"
 )
 
@@ -34,10 +38,10 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 	// 加载配置
 	config, err := loadConfig(filepath.Join(ext.Config().DataDir, "config.yaml"))
 	if err != nil {
-		ext.Log().Info("配置加载失败", zap.Error(err))
+		fmt.Printf("❌ 配置加载失败: %v\n", err)
 		return err
 	}
-	ext.Log().Info("✅ 配置加载成功")
+	fmt.Printf("✅ 配置加载成功\n")
 
 	// 4. 从 ext 对象中获取由 tdl 框架为我们创建好的、功能完整的客户端
 	client := ext.Client()
@@ -48,7 +52,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 	if err != nil {
 		return err
 	}
-	ext.Log().Info("👤 TDL 用户", zap.String("name", self.FirstName), zap.Int64("id", self.ID))
+	fmt.Printf("👤 TDL 用户: %s (ID: %d)\n", self.FirstName, self.ID)
 
 	// 创建处理器，并将功能完整的 client 传递进去
 	processor := &MessageProcessor{
@@ -59,7 +63,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 		selfUserID:      self.ID,
 		messageCache:    NewMessageCache(20000),
 		channelPts:      make(map[int64]int), // 初始化 pts 状态
-		linkRegex:       buildLinkRegex(config, ext.Log()), // 预编译链接提取正则
+		linkRegex:       buildLinkRegex(config), // 预编译链接提取正则
 		groupedMessages: make(map[int64][]int), // 初始化消息集合追踪
 	}
 
@@ -71,7 +75,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 	activeServices := 0
 
 	if config.Monitor.Enabled {
-		ext.Log().Info("👂 启动频道消息监听器...")
+		fmt.Printf("👂 启动频道消息监听器...\n")
 		activeServices++
 		go func() {
 			errChan <- processor.StartMessageListener(ctx)
@@ -79,7 +83,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 	}
 
 	if config.Bot.Enabled {
-		ext.Log().Info("🤖 启动 Telegram Bot...")
+		fmt.Printf("🤖 启动 Telegram Bot...\n")
 		activeServices++
 		go func() {
 			errChan <- processor.StartTelegramBot(ctx)
@@ -87,7 +91,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 	}
 
 	if config.Proxy.Enabled {
-		ext.Log().Info("🔄 启动 HTTP 代理服务...", zap.String("addr", fmt.Sprintf("%s:%d", config.Proxy.Host, config.Proxy.Port)))
+		fmt.Printf("🔄 启动 HTTP 代理服务... (地址: %s:%d)\n", config.Proxy.Host, config.Proxy.Port)
 		activeServices++
 		proxyServer := NewProxyServer(&config.Proxy)
 		go func() {
@@ -96,7 +100,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 	}
 
 	if config.CheckIn.Enabled && len(config.CheckIn.Tasks) > 0 {
-		ext.Log().Info("🕐 启动定时签到服务...", zap.Int("tasks", len(config.CheckIn.Tasks)))
+		fmt.Printf("🕐 启动定时签到服务... (任务数: %d)\n", len(config.CheckIn.Tasks))
 		activeServices++
 		go func() {
 			errChan <- processor.StartCheckInScheduler(ctx)
@@ -115,7 +119,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 
 	if activeServices == 0 {
 		<-ctx.Done()
-		ext.Log().Info("收到停止信号，正在关闭...")
+		fmt.Printf("收到停止信号，正在关闭...\n")
 		return nil
 	}
 
@@ -124,7 +128,7 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 	case err := <-errChan:
 		return err
 	case <-ctx.Done():
-		ext.Log().Info("收到停止信号，正在关闭...")
+		fmt.Printf("收到停止信号，正在关闭...\n")
 		return nil
 	}
 }

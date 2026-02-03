@@ -1,3 +1,10 @@
+// tdl-msgproce - Telegram Bot 接口和命令处理
+// 
+// 日志输出规范：
+// - 使用 fmt.Printf() 输出用户可见的日志信息
+// - 调试日志使用 // fmt.Printf() 注释格式
+// - 不使用 zap 日志库
+
 package main
 
 import (
@@ -17,7 +24,6 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"go.uber.org/zap"
 )
 
 // ForwardTask 转发任务
@@ -144,7 +150,6 @@ func (p *MessageProcessor) StartTelegramBot(ctx context.Context) error {
 	}
 
 	bot.Debug = false
-	p.ext.Log().Info(fmt.Sprintf("Bot 已授权: @%s", bot.Self.UserName))
 	fmt.Printf("✅ Bot 已授权: @%s\n", bot.Self.UserName)
 
 	// 创建任务管理器
@@ -155,7 +160,6 @@ func (p *MessageProcessor) StartTelegramBot(ctx context.Context) error {
 
 	updates := bot.GetUpdatesChan(u)
 
-	p.ext.Log().Info("Bot 开始监听消息...")
 	fmt.Println("🎧 Bot 开始监听用户消息...")
 
 	for {
@@ -287,15 +291,11 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 
 		// 异步执行脚本
 		go func() {
-			p.ext.Log().Info("执行 SS 命令",
-				zap.Int64("userID", msg.From.ID),
-				zap.String("command", subCmd))
+			fmt.Printf("✅ 执行 SS 命令 (userID=%d, command=%s)\n", msg.From.ID, subCmd)
 
 			output, err := p.executeSSCommand(ctx, subCmd)
 			if err != nil {
-				p.ext.Log().Error("SS 命令执行失败",
-					zap.Error(err),
-					zap.String("command", subCmd))
+				fmt.Printf("❌ SS 命令执行失败 (command=%s): %v\n", subCmd, err)
 				p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
 					fmt.Sprintf("❌ 执行失败:\n\n%s", err.Error()))
 				return
@@ -306,8 +306,7 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 				output = output[:3900] + "\n\n... (输出过长已截断)"
 			}
 
-			p.ext.Log().Info("SS 命令执行成功",
-				zap.String("command", subCmd))
+			fmt.Printf("✅ SS 命令执行成功 (command=%s)\n", subCmd)
 
 			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
 				fmt.Sprintf("✅ 执行完成:\n\n%s", output))
@@ -440,44 +439,41 @@ func (p *MessageProcessor) addNodesBatchToAPI(nodes []string) (bool, *Subscripti
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		p.ext.Log().Info("JSON 序列化失败", zap.Error(err))
+		fmt.Printf("❌ JSON 序列化失败: %v\n", err)
 		return false, nil
 	}
 
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		p.ext.Log().Info("创建请求失败", zap.Error(err))
+		fmt.Printf("❌ 创建请求失败: %v\n", err)
 		return false, nil
 	}
 
 	req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	p.ext.Log().Info(fmt.Sprintf("发送批量节点请求到 %s，共 %d 个节点", apiURL, len(nodes)))
+	fmt.Printf("✅ 发送批量节点请求到 %s，共 %d 个节点\n", apiURL, len(nodes))
 
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		p.ext.Log().Info("批量节点 API 请求失败", zap.Error(err))
+		fmt.Printf("❌ 批量节点 API 请求失败: %v\n", err)
 		return false, nil
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		p.ext.Log().Info("读取响应失败", zap.Error(err))
+		fmt.Printf("❌ 读取响应失败: %v\n", err)
 		return false, nil
 	}
 
 	// 记录原始响应（用于调试）
-	p.ext.Log().Info("API 响应", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
+	// fmt.Printf("[DEBUG] API 响应 (status=%d, body=%s)\n", resp.StatusCode, string(body))
 
 	var response SubscriptionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		p.ext.Log().Info("解析响应失败",
-			zap.Error(err),
-			zap.String("body", string(body)),
-			zap.Int("status", resp.StatusCode))
+		// fmt.Printf("[DEBUG] 解析响应失败 (error=%v, body=%s, status=%d)\n", err, string(body), resp.StatusCode)
 
 		// 如果是 200 状态码但解析失败，可能是纯文本响应
 		if resp.StatusCode == 200 {
@@ -489,27 +485,21 @@ func (p *MessageProcessor) addNodesBatchToAPI(nodes []string) (bool, *Subscripti
 	if resp.StatusCode == 200 || resp.StatusCode == 409 {
 		// 记录日志
 		if response.TestedNodes != nil {
-			p.ext.Log().Info("批量节点检测完成",
-				zap.Int("count", len(nodes)),
-				zap.Int("tested", *response.TestedNodes),
-				zap.String("duration", response.Duration))
+			fmt.Printf("✅ 批量节点检测完成 (count=%d, tested=%d, duration=%s)\n", len(nodes), *response.TestedNodes, response.Duration)
 		} else {
-			p.ext.Log().Info("批量节点添加成功", zap.Int("count", len(nodes)))
+			fmt.Printf("✅ 批量节点添加成功 (count=%d)\n", len(nodes))
 		}
 		return true, &response
 	}
 
 	// 处理检测失败的情况
 	if resp.StatusCode == 400 && response.TestedNodes != nil {
-		p.ext.Log().Info("批量节点检测失败",
-			zap.Int("count", len(nodes)),
-			zap.Int("tested", *response.TestedNodes),
-			zap.String("duration", response.Duration))
+		fmt.Printf("❌ 批量节点检测失败 (count=%d, tested=%d, duration=%s)\n", len(nodes), *response.TestedNodes, response.Duration)
 		return false, &response
 	}
 
 	// 其他错误
-	p.ext.Log().Info("批量节点提交失败", zap.String("error", response.Error))
+	fmt.Printf("❌ 批量节点提交失败: %s\n", response.Error)
 	return false, &response
 }
 
@@ -541,14 +531,14 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 
 	// 处理订阅（逐个提交）
 	for _, subLink := range subscriptions {
-		p.ext.Log().Info("检测到订阅: " + subLink)
+		fmt.Printf("✅ 检测到订阅: %s\n", subLink)
 		success, responseMsg := p.addSubscriptionToAPI(subLink, false)
 
 		if success {
-			p.ext.Log().Info("订阅添加成功: " + subLink)
+			fmt.Printf("✅ 订阅添加成功: %s\n", subLink)
 			successMessages = append(successMessages, responseMsg)
 		} else {
-			p.ext.Log().Error("订阅添加失败: " + subLink + " - " + responseMsg)
+			fmt.Printf("❌ 订阅添加失败: %s - %s\n", subLink, responseMsg)
 			errorMessages = append(errorMessages, responseMsg)
 		}
 
@@ -599,13 +589,13 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 
 	// 处理节点（批量提交）
 	if len(nodes) > 0 {
-		p.ext.Log().Info(fmt.Sprintf("检测到%d个节点，准备批量提交", len(nodes)))
+		fmt.Printf("✅ 检测到%d个节点，准备批量提交\n", len(nodes))
 		success, resp := p.addNodesBatchToAPI(nodes)
 
 		if success {
-			p.ext.Log().Info(fmt.Sprintf("批量节点添加成功: %d个", len(nodes)))
+			fmt.Printf("✅ 批量节点添加成功: %d个\n", len(nodes))
 		} else {
-			p.ext.Log().Error(fmt.Sprintf("批量节点添加失败: %d个", len(nodes)))
+			fmt.Printf("❌ 批量节点添加失败: %d个\n", len(nodes))
 		}
 
 		if resp != nil && resp.TestedNodes != nil {
@@ -750,44 +740,41 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		p.ext.Log().Info("JSON 序列化失败", zap.Error(err))
+		fmt.Printf("❌ JSON 序列化失败: %v\n", err)
 		return false, fmt.Sprintf("❌ 请求失败: %v", err)
 	}
 
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		p.ext.Log().Info("创建请求失败", zap.Error(err))
+		fmt.Printf("❌ 创建请求失败: %v\n", err)
 		return false, fmt.Sprintf("❌ 请求失败: %v", err)
 	}
 
 	req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	p.ext.Log().Info(fmt.Sprintf("发送%s请求到 %s", linkType, apiURL))
+	// fmt.Printf("[DEBUG] 发送%s请求到 %s\n", linkType, apiURL)
 
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		p.ext.Log().Info(fmt.Sprintf("%s API 请求失败", linkType), zap.Error(err))
+		fmt.Printf("❌ %s API 请求失败: %v\n", linkType, err)
 		return false, "❌ 无法连接到服务器"
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		p.ext.Log().Info("读取响应失败", zap.Error(err))
+		fmt.Printf("❌ 读取响应失败: %v\n", err)
 		return false, "❌ 读取响应失败"
 	}
 
 	// 记录原始响应（用于调试）
-	p.ext.Log().Info("API 响应", zap.Int("status", resp.StatusCode), zap.String("body", string(body)))
+	// fmt.Printf("[DEBUG] API 响应 (status=%d, body=%s)\n", resp.StatusCode, string(body))
 
 	var response SubscriptionResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		p.ext.Log().Info("解析响应失败",
-			zap.Error(err),
-			zap.String("body", string(body)),
-			zap.Int("status", resp.StatusCode))
+		// fmt.Printf("[DEBUG] 解析响应失败 (error=%v, body=%s, status=%d)\n", err, string(body), resp.StatusCode)
 
 		// 如果是 200 状态码但解析失败，可能是纯文本响应
 		if resp.StatusCode == 200 {
@@ -845,15 +832,9 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 			
 			// 记录日志
 			if success {
-				p.ext.Log().Info(fmt.Sprintf("%s检测并添加成功", linkType),
-					zap.String("link", link),
-					zap.Int("tested", *response.TestedNodes),
-					zap.String("duration", response.Duration))
+				fmt.Printf("✅ %s检测并添加成功 (link=%s, tested=%d, duration=%s)\n", linkType, link, *response.TestedNodes, response.Duration)
 			} else {
-				p.ext.Log().Info(fmt.Sprintf("%s检测失败，未添加节点", linkType),
-					zap.String("link", link),
-					zap.Int("tested", *response.TestedNodes),
-					zap.String("duration", response.Duration))
+				fmt.Printf("⚠️  %s检测失败，未添加节点 (link=%s, tested=%d, duration=%s)\n", linkType, link, *response.TestedNodes, response.Duration)
 			}
 			
 			return success, msg
@@ -863,7 +844,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 			if successMsg == "" {
 				successMsg = fmt.Sprintf("%s添加成功", linkType)
 			}
-			p.ext.Log().Info(fmt.Sprintf("%s添加成功: %s - %s", linkType, link, successMsg))
+			fmt.Printf("✅ %s添加成功: %s - %s\n", linkType, link, successMsg)
 			return true, fmt.Sprintf("✅ %s", successMsg)
 		}
 	}
@@ -899,10 +880,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 			msg += "\n⚠️ " + response.Warning
 		}
 		
-		p.ext.Log().Info(fmt.Sprintf("%s检测失败，未添加节点", linkType),
-			zap.String("link", link),
-			zap.Int("tested", *response.TestedNodes),
-			zap.String("duration", response.Duration))
+		fmt.Printf("⚠️  %s检测失败，未添加节点 (link=%s, tested=%d, duration=%s)\n", linkType, link, *response.TestedNodes, response.Duration)
 		
 		return false, msg
 	}
@@ -917,23 +895,10 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 				errorMsg = "该订阅链接已存在"
 			}
 		}
-		p.ext.Log().Info(fmt.Sprintf("%s已存在", linkType), zap.String("link", link))
-		return false, fmt.Sprintf("⚠️ %s", errorMsg)
-	}
-
-	// 处理服务器错误（500+）
-	if resp.StatusCode >= 500 {
-		errorMsg := response.Error
-		if errorMsg == "" {
-			errorMsg = response.Message
-		}
-		if errorMsg == "" {
+	// fmt.Printf("[DEBUG] %s已存在 (link=%s)\n", linkType, link)
 			errorMsg = fmt.Sprintf("服务器错误 (状态码: %d)", resp.StatusCode)
 		}
-		p.ext.Log().Error(fmt.Sprintf("%s服务器错误", linkType),
-			zap.String("link", link),
-			zap.Int("status", resp.StatusCode),
-			zap.String("error", errorMsg))
+		fmt.Printf("❌ %s服务器错误 (link=%s, status=%d, error=%s)\n", linkType, link, resp.StatusCode, errorMsg)
 		return false, fmt.Sprintf("❌ %s", errorMsg)
 	}
 
@@ -946,7 +911,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 		errorMsg = fmt.Sprintf("%s添加失败 (状态码: %d)", linkType, resp.StatusCode)
 	}
 
-	p.ext.Log().Info(fmt.Sprintf("%s添加失败: %s", linkType, errorMsg))
+	// fmt.Printf("[DEBUG] %s添加失败: %s\n", linkType, errorMsg)
 	return false, fmt.Sprintf("❌ %s", errorMsg)
 }
 
@@ -1154,7 +1119,7 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 		lastUpdate := time.Now()
 		lastPercent := -1
 		onProgress := func(percent int, line string) {
-			p.ext.Log().Info("进度回调", zap.Int("percent", percent), zap.String("line", line))
+			// fmt.Printf("[DEBUG] 进度回调 (percent=%d, line=%s)\n", percent, line)
 			task.Progress = percent
 
 			// 只在进度变化时保存新行（避免重复）
@@ -1171,7 +1136,7 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 			// 限制更新频率，根据任务类型使用不同间隔
 			if time.Since(lastUpdate) > updateInterval {
 				lastUpdate = time.Now()
-				p.ext.Log().Info("更新Bot消息", zap.Int("taskID", task.ID), zap.Int("percent", percent))
+				// fmt.Printf("[DEBUG] 更新Bot消息 (taskID=%d, percent=%d)\n", task.ID, percent)
 				statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)
 				p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
 			}
@@ -1187,11 +1152,11 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 		} else if err != nil {
 			task.Status = "failed"
 			task.Error = err.Error()
-			p.ext.Log().Info("转发失败", zap.Int("taskID", task.ID), zap.String("link", task.Link), zap.Error(err))
+			fmt.Printf("❌ 转发失败 (taskID=%d, link=%s): %v\n", task.ID, task.Link, err)
 		} else {
 			task.Status = "completed"
 			p.forwardCount++
-			p.ext.Log().Info("转发成功", zap.Int("taskID", task.ID), zap.String("link", task.Link))
+			fmt.Printf("✅ 转发成功 (taskID=%d, link=%s)\n", task.ID, task.Link)
 		}
 
 		// 更新状态显示
@@ -1336,12 +1301,12 @@ func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Contex
 			} else if err != nil {
 				task.Status = "failed"
 				task.Error = err.Error()
-				p.ext.Log().Info("转发失败", zap.Int("taskID", task.ID), zap.String("link", task.Link), zap.Error(err))
+				fmt.Printf("❌ 转发失败 (taskID=%d, link=%s): %v\n", task.ID, task.Link, err)
 			} else {
 				task.Status = "completed"
 				task.Progress = 100
 				p.forwardCount++
-				p.ext.Log().Info("转发成功", zap.Int("taskID", task.ID), zap.String("link", task.Link))
+				fmt.Printf("✅ 转发成功 (taskID=%d, link=%s)\n", task.ID, task.Link)
 			}
 
 			// 更新显示（任务完成）
@@ -1440,7 +1405,7 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		lastUpdate := time.Now()
 		lastPercent := -1
 		onProgress := func(percent int, line string) {
-			p.ext.Log().Info("进度回调", zap.Int("percent", percent), zap.String("line", line))
+			// fmt.Printf("[DEBUG] 进度回调 (percent=%d, line=%s)\n", percent, line)
 			task.Progress = percent
 
 			// 只在进度变化时保存新行（避免重复）
@@ -1457,7 +1422,7 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 			// 限制更新频率，根据任务类型使用不同间隔
 			if time.Since(lastUpdate) > updateInterval {
 				lastUpdate = time.Now()
-				p.ext.Log().Info("更新Bot消息", zap.Int("taskID", task.ID), zap.Int("percent", percent))
+				// fmt.Printf("[DEBUG] 更新Bot消息 (taskID=%d, percent=%d)\n", task.ID, percent)
 				statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)
 				p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
 			}
@@ -1473,11 +1438,11 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		} else if err != nil {
 			task.Status = "failed"
 			task.Error = err.Error()
-			p.ext.Log().Info("转发失败", zap.Int("taskID", task.ID), zap.String("link", task.Link), zap.Error(err))
+			fmt.Printf("❌ 转发失败 (taskID=%d, link=%s): %v\n", task.ID, task.Link, err)
 		} else {
 			task.Status = "completed"
 			p.forwardCount++
-			p.ext.Log().Info("转发成功", zap.Int("taskID", task.ID), zap.String("link", task.Link))
+			fmt.Printf("✅ 转发成功 (taskID=%d, link=%s)\n", task.ID, task.Link)
 		}
 
 		// 更新状态显示
@@ -1559,7 +1524,7 @@ func (p *MessageProcessor) handleCallbackQuery(ctx context.Context, bot *tgbotap
 
 	// 取消批量任务
 	if taskManager.CancelBatch(userID, int(batchID)) {
-		p.ext.Log().Info("用户终止批量任务", zap.Int64("userID", userID), zap.Int64("batchID", batchID))
+		fmt.Printf("✅ 用户终止批量任务 (userID=%d, batchID=%d)\n", userID, batchID)
 		callback := tgbotapi.NewCallback(query.ID, "✅ 所有任务已终止")
 		bot.Request(callback)
 	} else {
@@ -1588,7 +1553,7 @@ func (p *MessageProcessor) downloadSSScript() (string, error) {
 		return "", fmt.Errorf("创建请求失败: %w", err)
 	}
 
-	p.ext.Log().Info("下载 SS 脚本", zap.String("url", scriptURL))
+	// fmt.Printf("[DEBUG] 下载 SS 脚本 (url=%s)\n", scriptURL)
 
 	// 发送请求
 	resp, err := client.Do(req)
@@ -1625,7 +1590,7 @@ func (p *MessageProcessor) downloadSSScript() (string, error) {
 		}
 	}
 
-	p.ext.Log().Info("脚本下载成功", zap.String("tmpPath", tmpPath))
+	// fmt.Printf("[DEBUG] 脚本下载成功 (tmpPath=%s)\n", tmpPath)
 	return tmpPath, nil
 }
 
@@ -1656,10 +1621,7 @@ func (p *MessageProcessor) executeSSCommand(ctx context.Context, subCmd string) 
 		bashPath = "/bin/bash"
 	}
 
-	p.ext.Log().Info("执行脚本",
-		zap.String("bash", bashPath),
-		zap.String("script", tmpPath),
-		zap.String("subCmd", subCmd))
+	// fmt.Printf("[DEBUG] 执行脚本 (bash=%s, script=%s, subCmd=%s)\n", bashPath, tmpPath, subCmd)
 
 	// 执行脚本：bash tmpPath ss subCmd
 	cmd := exec.CommandContext(execCtx, bashPath, tmpPath, "ss", subCmd)
@@ -1733,11 +1695,7 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 		return
 	}
 	
-	p.ext.Log().Info("收到文档文件",
-		zap.String("fileName", doc.FileName),
-		zap.Int("fileSize", doc.FileSize),
-		zap.Int64("userID", msg.From.ID),
-		zap.Int64("forwardTarget", forwardTarget))
+	fmt.Printf("📄 收到文档文件 (fileName=%s, fileSize=%d, userID=%d, forwardTarget=%d)\n", doc.FileName, doc.FileSize, msg.From.ID, forwardTarget)
 	
 	// 发送下载中提示
 	statusMsg := p.sendBotMessage(bot, msg.Chat.ID,
@@ -1750,7 +1708,7 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	fileConfig := tgbotapi.FileConfig{FileID: doc.FileID}
 	file, err := bot.GetFile(fileConfig)
 	if err != nil {
-		p.ext.Log().Error("获取文件失败", zap.Error(err))
+		fmt.Printf("❌ 获取文件失败: %v\n", err)
 		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
 			"❌ 获取文件失败: "+err.Error())
 		return
@@ -1763,7 +1721,7 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	fileURL := file.Link(bot.Token)
 	resp, err := http.Get(fileURL)
 	if err != nil {
-		p.ext.Log().Error("下载文件失败", zap.Error(err))
+		fmt.Printf("❌ 下载文件失败: %v\n", err)
 		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
 			"❌ 下载文件失败: "+err.Error())
 		return
@@ -1773,7 +1731,7 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	// 保存文件
 	outFile, err := os.Create(tmpFilePath)
 	if err != nil {
-		p.ext.Log().Error("创建文件失败", zap.Error(err))
+		fmt.Printf("❌ 创建文件失败: %v\n", err)
 		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
 			"❌ 创建文件失败: "+err.Error())
 		return
@@ -1782,16 +1740,14 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	written, err := io.Copy(outFile, resp.Body)
 	outFile.Close()
 	if err != nil {
-		p.ext.Log().Error("保存文件失败", zap.Error(err))
+		fmt.Printf("❌ 保存文件失败: %v\n", err)
 		os.Remove(tmpFilePath)
 		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
 			"❌ 保存文件失败: "+err.Error())
 		return
 	}
 	
-	p.ext.Log().Info("文件下载成功",
-		zap.String("filePath", tmpFilePath),
-		zap.Int64("size", written))
+	fmt.Printf("✅ 文件下载成功 (filePath=%s, size=%d)\n", tmpFilePath, written)
 	
 	// 更新状态 - 文件下载完成
 	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
@@ -1808,16 +1764,14 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 	// 解析 JSON 文件获取消息链接
 	links, err := p.parseJSONMessages(finalFilePath)
 	if err != nil {
-		p.ext.Log().Error("解析 JSON 文件失败", zap.Error(err))
+		fmt.Printf("❌ 解析 JSON 文件失败: %v\n", err)
 		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
 			fmt.Sprintf("❌ 解析文件失败\n\n错误: %s", err.Error()))
 		os.Remove(tmpFilePath)
 		return
 	}
 	
-	p.ext.Log().Info("JSON 解析完成", 
-		zap.String("file", finalFilePath),
-		zap.Int("totalMessages", len(links)))
+	fmt.Printf("✅ JSON 解析完成 (file=%s, totalMessages=%d)\n", finalFilePath, len(links))
 	
 	// 创建转发任务（每5条消息为一组）
 	batchID := taskManager.GetNextBatchID(msg.From.ID)
@@ -1899,11 +1853,9 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 		
 		// 删除文件
 		if err := os.Remove(finalFilePath); err != nil {
-			p.ext.Log().Warn("删除文件失败",
-				zap.String("filePath", finalFilePath),
-				zap.Error(err))
+			fmt.Printf("⚠️  删除文件失败 (filePath=%s): %v\n", finalFilePath, err)
 		} else {
-			p.ext.Log().Info("文件已删除", zap.String("filePath", finalFilePath))
+			fmt.Printf("✅ 文件已删除 (filePath=%s)\n", finalFilePath)
 		}
 	}()
 }

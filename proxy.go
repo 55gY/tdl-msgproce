@@ -1,3 +1,9 @@
+// tdl-msgproce - HTTP 代理服务器（用于订阅解析）
+// 
+// 日志输出规范：
+// - 使用 fmt.Printf() 输出用户可见的日志信息
+// - 调试日志使用 // fmt.Printf() 注释格式
+// - 不使用 zap 日志库
 package main
 
 import (

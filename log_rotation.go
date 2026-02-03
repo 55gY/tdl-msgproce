@@ -1,3 +1,9 @@
+// tdl-msgproce - 日志文件轮转管理
+// 
+// 日志输出规范：
+// - 使用 fmt.Printf() 输出用户可见的日志信息
+// - 调试日志使用 // fmt.Printf() 注释格式
+// - 不使用 zap 日志库
 package main
 
 import (

@@ -8,7 +8,6 @@ require (
 	github.com/iyear/tdl v0.20.0
 	github.com/iyear/tdl/core v0.20.0
 	github.com/iyear/tdl/extension v0.20.0
-	go.uber.org/zap v1.27.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

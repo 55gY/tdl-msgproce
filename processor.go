@@ -1,3 +1,9 @@
+// tdl-msgproce - 消息处理器核心逻辑
+// 
+// 日志输出规范：
+// - 使用 fmt.Printf() 输出用户可见的日志信息
+// - 调试日志使用 // fmt.Printf() 注释格式
+// - 不使用 zap 日志库
 package main
 
 import (
@@ -9,8 +15,6 @@ import (
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
-	"go.uber.org/zap"
-
 	"github.com/iyear/tdl/extension"
 )
 
@@ -73,7 +77,7 @@ func (p *MessageProcessor) RegisterHandlers(dispatcher tg.UpdateDispatcher) {
 	dispatcher.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateNewChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
 			if _, _, err := p.handleMessage(ctx, msg, e); err != nil {
-				p.ext.Log().Info("处理新消息失败", zap.Error(err))
+				fmt.Printf("处理新消息失败: %v\n", err)
 			}
 		}
 		return nil
@@ -83,7 +87,7 @@ func (p *MessageProcessor) RegisterHandlers(dispatcher tg.UpdateDispatcher) {
 	dispatcher.OnEditChannelMessage(func(ctx context.Context, e tg.Entities, update *tg.UpdateEditChannelMessage) error {
 		if msg, ok := update.Message.(*tg.Message); ok {
 			if _, _, err := p.handleEditMessage(ctx, msg, e); err != nil {
-				p.ext.Log().Info("处理编辑消息失败", zap.Error(err))
+				fmt.Printf("处理编辑消息失败: %v\n", err)
 			}
 		}
 		return nil
@@ -98,18 +102,16 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 		if fetchCount > 0 && len(p.config.Monitor.Channels) > 0 {
 			fmt.Printf("📥 历史消息功能: ✅ 已启用 (每个频道获取 %d 条)\n", fetchCount)
 			fmt.Printf("🔄 正在获取 %d 个频道的历史消息...\n", len(p.config.Monitor.Channels))
-			p.ext.Log().Info("开始获取历史消息", zap.Int("fetch_count", fetchCount))
 			// 使用一个新的后台 context，以防主 context 因为其他原因提前结束
 			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 
 			for _, channelID := range p.config.Monitor.Channels {
 				if err := p.fetchChannelHistory(bgCtx, channelID, fetchCount); err != nil {
-					p.ext.Log().Info("获取历史消息失败", zap.Int64("channel", channelID), zap.Error(err))
+					fmt.Printf("获取历史消息失败 (频道=%d): %v\n", channelID, err)
 				}
 			}
 			fmt.Printf("✅ 历史消息获取完成\n")
-			p.ext.Log().Info("历史消息获取完成")
 		} else {
 			fmt.Printf("📥 历史消息功能: ❌ 已禁用\n")
 		}
@@ -120,7 +122,7 @@ func (p *MessageProcessor) StartMessageListener(ctx context.Context) error {
 	// 它会自动处理连接、认证和接收更新的循环。
 	// 当传入的 ctx 被取消时（例如用户按 Ctrl+C），Run 方法会自动返回。
 	return p.client.Run(ctx, func(ctx context.Context) error {
-		p.ext.Log().Info("✅ 消息监听器已连接并成功运行")
+		fmt.Printf("✅ 消息监听器已连接并成功运行\n")
 		<-ctx.Done()
 		return ctx.Err()
 	})

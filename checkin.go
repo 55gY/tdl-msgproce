@@ -1,3 +1,10 @@
+// tdl-msgproce - 定时签到功能实现
+// 
+// 日志输出规范：
+// - 使用 fmt.Printf() 输出用户可见的日志信息
+// - 调试日志使用 // fmt.Printf() 注释格式
+// - 不使用 zap 日志库
+
 package main
 
 import (
@@ -9,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gotd/td/tg"
-	"go.uber.org/zap"
 )
 
 // checkInScheduler 签到调度器
@@ -22,12 +28,12 @@ type checkInScheduler struct {
 // StartCheckInScheduler 启动定时签到调度器
 func (p *MessageProcessor) StartCheckInScheduler(ctx context.Context) error {
 	if !p.config.CheckIn.Enabled {
-		p.ext.Log().Info("定时签到功能未启用")
+		fmt.Println("ℹ️ 定时签到功能未启用")
 		return nil
 	}
 
 	if len(p.config.CheckIn.Tasks) == 0 {
-		p.ext.Log().Info("没有配置签到任务")
+		fmt.Println("ℹ️ 没有配置签到任务")
 		return nil
 	}
 
@@ -36,16 +42,12 @@ func (p *MessageProcessor) StartCheckInScheduler(ctx context.Context) error {
 		lastExecuted: make(map[string]time.Time),
 	}
 
-	p.ext.Log().Info("🕐 定时签到调度器已启动",
-		zap.Int("任务数量", len(p.config.CheckIn.Tasks)))
+	fmt.Printf("🕐 定时签到调度器已启动 (任务数量=%d)\n", len(p.config.CheckIn.Tasks))
 
 	// 打印所有任务配置
 	for i, task := range p.config.CheckIn.Tasks {
-		p.ext.Log().Info("📋 签到任务配置",
-			zap.Int("任务序号", i+1),
-			zap.Int64("机器人ID", task.Bot),
-			zap.String("消息内容", task.Message),
-			zap.String("Cron表达式", task.Cron))
+		fmt.Printf("📋 签到任务配置 (任务序号=%d, 机器人id=%d, 消息内容=%s, Cron表达式=%s)\n",
+			i+1, task.Bot, task.Message, task.Cron)
 	}
 
 	// 启动调度循环
@@ -53,7 +55,7 @@ func (p *MessageProcessor) StartCheckInScheduler(ctx context.Context) error {
 
 	// 保持运行
 	<-ctx.Done()
-	p.ext.Log().Info("定时签到调度器已停止")
+	fmt.Println("🛑 定时签到调度器已停止")
 	return nil
 }
 
@@ -62,7 +64,7 @@ func (s *checkInScheduler) scheduleLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute) // 每分钟检查一次
 	defer ticker.Stop()
 
-	s.processor.ext.Log().Info("⏰ 签到调度循环已启动，每分钟检查一次")
+	fmt.Println("⏰ 签到调度循环已启动，每分钟检查一次")
 
 	for {
 		select {
@@ -92,16 +94,10 @@ func (s *checkInScheduler) checkAndExecuteTasks(ctx context.Context, now time.Ti
 		// 执行签到
 		go func(t CheckInTask, idx int) {
 			if err := s.performCheckIn(ctx, t); err != nil {
-				s.processor.ext.Log().Error("❌ 签到失败",
-					zap.Int("任务序号", idx+1),
-					zap.Int64("机器人ID", t.Bot),
-					zap.Error(err))
+				fmt.Printf("❌ 签到失败 (任务序号=%d, 机器人id=%d): %v\n", idx+1, t.Bot, err)
 			} else {
-				s.processor.ext.Log().Info("✅ 签到成功",
-					zap.Int("任务序号", idx+1),
-					zap.Int64("机器人ID", t.Bot),
-					zap.String("消息", t.Message),
-					zap.Time("执行时间", time.Now()))
+				fmt.Printf("✅ 签到成功 (任务序号=%d, 机器人id=%d, 消息=%s, 执行时间=%s)\n",
+					idx+1, t.Bot, t.Message, time.Now().Format("2006-01-02 15:04:05"))
 			}
 		}(task, i)
 	}

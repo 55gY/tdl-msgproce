@@ -1,16 +1,20 @@
+// tdl-msgproce - 链接处理工具函数
+// 
+// 日志输出规范：
+// - 使用 fmt.Printf() 输出用户可见的日志信息
+// - 调试日志使用 // fmt.Printf() 注释格式
+// - 不使用 zap 日志库
 package main
 
 import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"go.uber.org/zap"
 )
 
 // buildLinkRegex 根据配置构建链接提取的正则表达式
 // 如果配置中的 subs 和 ss 都为空，则使用默认协议列表
-func buildLinkRegex(config *Config, log *zap.Logger) *regexp.Regexp {
+func buildLinkRegex(config *Config) *regexp.Regexp {
 	// 默认协议列表（与 config.yaml 保持一致，按长度降序排列）
 	defaultProtocols := []string{
 		"hysteria2", "wireguard", "hysteria", "juicity",
@@ -37,10 +41,7 @@ func buildLinkRegex(config *Config, log *zap.Logger) *regexp.Regexp {
 	// 如果配置为空，使用默认值
 	if len(protocols) == 0 {
 		protocols = defaultProtocols
-		if log != nil {
-			log.Debug("配置中未找到协议列表，使用默认协议",
-				zap.Int("count", len(defaultProtocols)))
-		}
+		// fmt.Printf("[DEBUG] 配置中未找到协议列表，使用默认协议 (数量: %d)\n", len(defaultProtocols))
 	}
 
 	// 构建正则表达式模式
