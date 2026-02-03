@@ -139,6 +139,11 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 				// 使用 groupedID 作为唯一标识
 				groupIDInt := int(groupedID)
 				
+				// 收集消息ID到集合中
+				p.groupedMessagesMu.Lock()
+				p.groupedMessages[groupedID] = append(p.groupedMessages[groupedID], msg.ID)
+				p.groupedMessagesMu.Unlock()
+				
 				// 检查是否已经在处理队列中
 				if p.messageCache.Has(peerID, groupIDInt) {
 					// 此消息集合已标记处理，跳过
@@ -159,23 +164,30 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 					zap.String("info", "延迟2秒后处理"))
 				
 				// 延迟处理：等待消息集合的所有消息到达
-				go func() {
-					// 等待2秒，确保集合中的所有消息都已到达
-					time.Sleep(2 * time.Second)
-					
-					p.ext.Log().Info("开始处理消息集合",
-						zap.Int("message_id", msg.ID),
-						zap.Int64("grouped_id", groupedID))
-					
-					if err := p.recloneForwardedMessage(context.Background(), msg, peerID, fwdInfo); err != nil {
-						p.ext.Log().Error("❌ 自动克隆转发消息失败",
-							zap.Int("message_id", msg.ID),
-							zap.Int64("grouped_id", groupedID),
-							zap.Int64("channel_id", peerID),
-							zap.Error(err))
-					}
-				}()
+			go func(capturedGroupID int64, capturedChannelID int64, capturedMsg *tg.Message, capturedFwdInfo tg.MessageFwdHeader) {
+				// 等待2秒，确保集合中的所有消息都已到达
+				time.Sleep(2 * time.Second)
 				
+				// 获取收集到的所有消息ID
+				p.groupedMessagesMu.Lock()
+				allMessageIDs := p.groupedMessages[capturedGroupID]
+				delete(p.groupedMessages, capturedGroupID) // 清理
+				p.groupedMessagesMu.Unlock()
+				
+				p.ext.Log().Info("开始处理消息集合",
+					zap.Int("first_message_id", capturedMsg.ID),
+					zap.Int64("grouped_id", capturedGroupID),
+					zap.Int("total_messages", len(allMessageIDs)),
+					zap.Ints("message_ids", allMessageIDs))
+				
+				if err := p.recloneForwardedMessageGroup(context.Background(), capturedMsg, capturedChannelID, capturedFwdInfo, allMessageIDs); err != nil {
+					p.ext.Log().Error("❌ 自动克隆转发消息失败",
+						zap.Int("message_id", capturedMsg.ID),
+						zap.Int64("grouped_id", capturedGroupID),
+						zap.Int64("channel_id", capturedChannelID),
+						zap.Error(err))
+				}
+			}(groupedID, peerID, msg, fwdInfo)
 				// 跳过后续处理（不提取订阅链接等）
 				return 0, 0, nil
 			} else {
@@ -852,6 +864,63 @@ func (p *MessageProcessor) getChannelAccessHash(ctx context.Context, channelID i
 	}
 
 	return accessHash, nil
+}
+
+// recloneForwardedMessageGroup 克隆转发消息集合（去除转发头）并删除所有原始消息
+func (p *MessageProcessor) recloneForwardedMessageGroup(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader, messageIDs []int) error {
+	// 构造消息链接（私有频道格式）
+	msgLink := fmt.Sprintf("https://t.me/c/%d/%d", channelID, msg.ID)
+	
+	p.ext.Log().Info("开始克隆转发消息集合",
+		zap.Int("原消息ID", msg.ID),
+		zap.Int64("频道ID", channelID),
+		zap.String("消息链接", msgLink),
+		zap.Int("消息数量", len(messageIDs)))
+	
+	// 使用现有的 forwardFromLink 方法，Single 设为 false：让 tdl 自动检测消息集合并作为专辑转发
+	if err := p.forwardFromLink(ctx, msgLink, &channelID, nil, false); err != nil {
+		return fmt.Errorf("克隆转发失败: %w", err)
+	}
+	
+	p.ext.Log().Info("✅ 克隆转发成功",
+		zap.Int("原消息ID", msg.ID),
+		zap.Int64("频道ID", channelID))
+	
+	// 克隆成功后删除所有原始带转发头的消息
+	accessHash, err := p.getChannelAccessHash(ctx, channelID)
+	if err != nil {
+		p.ext.Log().Warn("获取频道 AccessHash 失败（已成功克隆）",
+			zap.Ints("原消息IDs", messageIDs),
+			zap.Int64("频道ID", channelID),
+			zap.Error(err))
+		return nil
+	}
+	
+	// 使用 ChannelsDeleteMessages API 删除所有消息
+	deleteRequest := &tg.ChannelsDeleteMessagesRequest{
+		Channel: &tg.InputChannel{
+			ChannelID:  channelID,
+			AccessHash: accessHash,
+		},
+		ID: messageIDs, // 删除所有消息
+	}
+	
+	affectedMessages, err := p.api.ChannelsDeleteMessages(ctx, deleteRequest)
+	if err != nil {
+		p.ext.Log().Warn("删除原始转发消息集合失败（已成功克隆）",
+			zap.Ints("原消息IDs", messageIDs),
+			zap.Int64("频道ID", channelID),
+			zap.Error(err))
+	} else {
+		p.ext.Log().Info("🗑️ 已删除原始转发消息集合",
+			zap.Ints("消息IDs", messageIDs),
+			zap.Int64("频道ID", channelID),
+			zap.Int("数量", len(messageIDs)),
+			zap.Int("pts", affectedMessages.Pts),
+			zap.Int("count", affectedMessages.PtsCount))
+	}
+	
+	return nil
 }
 
 func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader) error {

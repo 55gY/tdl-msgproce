@@ -29,6 +29,10 @@ type MessageProcessor struct {
 	channelPts     map[int64]int // 每个频道的 pts 状态
 	channelPtsMu   sync.RWMutex  // pts 状态的互斥锁
 	linkRegex      *regexp.Regexp // 预编译的链接提取正则表达式
+	
+	// 消息集合追踪（用于 auto_reclone_forwards）
+	groupedMessages   map[int64][]int // groupedID -> []messageID
+	groupedMessagesMu sync.RWMutex
 }
 
 // getSelfUser 获取当前用户信息

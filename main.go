@@ -52,14 +52,15 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 
 	// 创建处理器，并将功能完整的 client 传递进去
 	processor := &MessageProcessor{
-		ext:          ext,
-		config:       config,
-		api:          api,
-		client:       client, // 使用 tdl 为我们创建好的客户端
-		selfUserID:   self.ID,
-		messageCache: NewMessageCache(20000),
-		channelPts:   make(map[int64]int), // 初始化 pts 状态
-		linkRegex:    buildLinkRegex(config, ext.Log()), // 预编译链接提取正则
+		ext:             ext,
+		config:          config,
+		api:             api,
+		client:          client, // 使用 tdl 为我们创建好的客户端
+		selfUserID:      self.ID,
+		messageCache:    NewMessageCache(20000),
+		channelPts:      make(map[int64]int), // 初始化 pts 状态
+		linkRegex:       buildLinkRegex(config, ext.Log()), // 预编译链接提取正则
+		groupedMessages: make(map[int64][]int), // 初始化消息集合追踪
 	}
 
 	// 5. 调用新方法，将所有的消息处理逻辑注册到 dispatcher 中
