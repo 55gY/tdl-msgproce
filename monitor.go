@@ -149,9 +149,7 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 				if p.messageCache.Has(peerID, groupIDInt) {
 					// 此消息集合已标记处理，跳过
 				// fmt.Printf("[DEBUG] 消息集合已在处理队列，跳过 (message_id=%d, grouped_id=%d, channel_id=%d)\n", msg.ID, groupedID, peerID)
-				}
-				
-				// 标记此消息集合为处理中
+				return 0, 0, nil
 				p.messageCache.Add(peerID, groupIDInt, 0)
 				
 				fmt.Printf("✅ 检测到转发消息集合 (message_id=%d, grouped_id=%d, channel_id=%d, 延迟2秒后处理)\n", msg.ID, groupedID, peerID)
