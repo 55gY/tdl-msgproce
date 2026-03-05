@@ -4,7 +4,7 @@
 # ==================== Telegram Bot 配置 ====================
 bot:
   enabled: true  # 是否启用 Bot 功能
-  token: ""  # Bot Token
+  token: ""  # 从 @BotFather 获取
   
   # 允许使用的用户列表（留空表示所有用户都可以使用）
   allowed_users: [403917294,6170578211]  # 例如: [123456789, 987654321]
@@ -23,7 +23,7 @@ monitor:
   # 订阅 API 配置
   subscription_api:
     api_key: "123456"                                          # API 密钥
-    add_url: ""  # 添加订阅的完整 URL
+    add_url: "http://xx.xx/api/config/add"  # 添加订阅的完整 URL
 
   # 获取历史消息功能
   features:
@@ -37,8 +37,12 @@ monitor:
     - 1965523384
     - 1914963500
     - 1695276861
+    - 1509346482
+    - 1506497974
+    - 2672409101
     - 2817717177
     - 1313311705
+    - 2255799479
 
   # 白名单频道 - 这些频道不经过二次内容过滤
   whitelist_channels:
@@ -109,3 +113,4 @@ checkin:
     - bot: 7983923821           # 机器人用户ID
       message: '/qd'            # 签到消息（单引号无需转义反斜杠）
       cron: '0 9 * * *'         # 分、时、天、月、周
+
