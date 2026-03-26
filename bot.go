@@ -1139,7 +1139,7 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 		}
 
 		// 执行转发（传入进度回调和自定义目标）
-		err := p.forwardFromLink(ctx, task.Link, &customTarget, onProgress, true)
+		err := p.forwardFromLink(ctx, task.Link, &customTarget, onProgress, true, nil)
 
 		// 检查context是否被取消
 		if ctx.Err() == context.Canceled {
@@ -1288,7 +1288,7 @@ func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Contex
 			}
 
 			// 执行转发（传入目标参数）
-			err := p.forwardFromLink(ctx, task.Link, &customTarget, onProgress, true)
+			err := p.forwardFromLink(ctx, task.Link, &customTarget, onProgress, true, nil)
 
 			// 检查context是否被取消
 			if ctx.Err() == context.Canceled {
@@ -1425,7 +1425,7 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		}
 
 		// 执行转发（传入进度回调）
-		err := p.forwardFromLink(ctx, task.Link, nil, onProgress, true)
+		err := p.forwardFromLink(ctx, task.Link, nil, onProgress, true, nil)
 
 		// 检查context是否被取消
 		if ctx.Err() == context.Canceled {

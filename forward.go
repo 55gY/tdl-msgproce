@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/gotd/td/tg"
 	"github.com/iyear/tdl/app/forward"
 	"github.com/iyear/tdl/core/forwarder"
 	"github.com/iyear/tdl/core/storage"
@@ -132,7 +133,8 @@ func (pw *progressWriter) Write(p []byte) (n int, err error) {
 // - @channel_username
 // target: 可选的转发目标 ID，为 nil 时使用配置文件中的默认目标
 // single: 是否单条模式，true 时逐条转发，false 时批量转发
-func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, target *int64, onProgress func(int, string), single bool) error {
+// msg: 可选原始消息，传入时仅保留 #标签 文本
+func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, target *int64, onProgress func(int, string), single bool, msg *tg.Message) error {
 	fmt.Printf("✅ 开始转发 (link=%s)\n", link)
 
 	// 确定转发目标
@@ -165,6 +167,11 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 			Single: single,                    // 是否单条模式：true 时逐条转发，false 时批量转发
 			Desc:   false,                     // 是否降序
 		}
+	if msg != nil {
+		re := regexp.MustCompile(`#[^\s#]+`)
+		tags := re.FindAllString(msg.Message, -1)
+		opts.Edit = strconv.Quote(strings.Join(tags, " "))
+	}
 		client := p.ext.Client()
 		if err := forward.Run(ctx, client, kvd, opts); err != nil {
 			return fmt.Errorf("转发失败: %w", err)
@@ -228,6 +235,11 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 		Single: single,                    // 是否单条模式：true 时逐条转发，false 时批量转发
 		Desc:   false,                     // 是否降序
 	}
+		if msg != nil {
+			re := regexp.MustCompile(`#[^\s#]+`)
+			tags := re.FindAllString(msg.Message, -1)
+			opts.Edit = strconv.Quote(strings.Join(tags, " "))
+		}
 
 	// 调用 tdl 的 forward 功能
 	client := p.ext.Client()

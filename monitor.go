@@ -1,5 +1,5 @@
 // tdl-msgproce - 消息监听和处理核心逻辑
-// 
+//
 // 日志输出规范：
 // - 使用 fmt.Printf() 输出用户可见的日志信息
 // - 调试日志使用 // fmt.Printf() 注释格式
@@ -36,7 +36,6 @@ type SubscriptionResponse struct {
 // handleMessage 处理新消息（非编辑），返回 (有效订阅数, 有效节点数, error)
 func (p *MessageProcessor) handleMessage(ctx context.Context, msg *tg.Message, entities tg.Entities) (int, int, error) {
 	peerID := getPeerID(msg.PeerID)
-
 
 	// 获取编辑时间（如果有）
 	editDate := 0
@@ -123,63 +122,59 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 
 	// 【新功能】检查是否为 forward_target 频道的转发消息，自动克隆去除转发头
 	// 如果是 forward_target 频道，输出完整的原始消息结构
-	// if peerID == p.config.Bot.ForwardTarget {
-	// 	p.ext.Log().Info("📋 forward_target 频道收到消息",
-	// 		zap.Int("message_id", msg.ID),
-	// 		zap.Any("raw_message", msg))
-	// }
+	// fmt.Printf("📋 forward_target 频道收到消息 (message_id=%d): %+v\n", msg.ID, msg)
 
 	if p.config.Monitor.Features.AutoRecloneForwards && peerID == p.config.Bot.ForwardTarget {
 		fwdInfo, hasFwdFrom := msg.GetFwdFrom()
 		if hasFwdFrom {
 			// 检查是否为消息集合（Media Group/Album）
 			groupedID, hasGroupedID := msg.GetGroupedID()
-			
+
 			if hasGroupedID {
 				// 这是消息集合的一部分
 				// 使用 groupedID 作为唯一标识
 				groupIDInt := int(groupedID)
-				
+
 				// 收集消息ID到集合中
 				p.groupedMessagesMu.Lock()
 				p.groupedMessages[groupedID] = append(p.groupedMessages[groupedID], msg.ID)
 				p.groupedMessagesMu.Unlock()
-				
+
 				// 检查是否已经在处理队列中
 				if p.messageCache.Has(peerID, groupIDInt) {
 					// 此消息集合已标记处理，跳过
 					// fmt.Printf("[DEBUG] 消息集合已在处理队列，跳过 (message_id=%d, grouped_id=%d, channel_id=%d)\n", msg.ID, groupedID, peerID)
 					return 0, 0, nil
 				}
-				
+
 				// 标记此消息集合为处理中
 				p.messageCache.Add(peerID, groupIDInt, 0)
-				
+
 				fmt.Printf("✅ 检测到转发消息集合 (message_id=%d, grouped_id=%d, channel_id=%d, 延迟2秒后处理)\n", msg.ID, groupedID, peerID)
-				
+
 				// 延迟处理：等待消息集合的所有消息到达
-			go func(capturedGroupID int64, capturedChannelID int64, capturedMsg *tg.Message, capturedFwdInfo tg.MessageFwdHeader) {
-				// 等待2秒，确保集合中的所有消息都已到达
-				time.Sleep(2 * time.Second)
-				
-				// 获取收集到的所有消息ID
-				p.groupedMessagesMu.Lock()
-				allMessageIDs := p.groupedMessages[capturedGroupID]
-				delete(p.groupedMessages, capturedGroupID) // 清理
-				p.groupedMessagesMu.Unlock()
-				
-				fmt.Printf("开始处理消息集合 (first_message_id=%d, grouped_id=%d, total_messages=%d)\n", capturedMsg.ID, capturedGroupID, len(allMessageIDs))
-				
-				if err := p.recloneForwardedMessageGroup(context.Background(), capturedMsg, capturedChannelID, capturedFwdInfo, allMessageIDs); err != nil {
-					fmt.Printf("❌ 自动克隆转发消息失败 (message_id=%d, grouped_id=%d, channel_id=%d): %v\n", capturedMsg.ID, capturedGroupID, capturedChannelID, err)
-				}
-			}(groupedID, peerID, msg, fwdInfo)
+				go func(capturedGroupID int64, capturedChannelID int64, capturedMsg *tg.Message, capturedFwdInfo tg.MessageFwdHeader) {
+					// 等待2秒，确保集合中的所有消息都已到达
+					time.Sleep(2 * time.Second)
+
+					// 获取收集到的所有消息ID
+					p.groupedMessagesMu.Lock()
+					allMessageIDs := p.groupedMessages[capturedGroupID]
+					delete(p.groupedMessages, capturedGroupID) // 清理
+					p.groupedMessagesMu.Unlock()
+
+					fmt.Printf("开始处理消息集合 (first_message_id=%d, grouped_id=%d, total_messages=%d)\n", capturedMsg.ID, capturedGroupID, len(allMessageIDs))
+
+					if err := p.recloneForwardedMessageGroup(context.Background(), capturedMsg, capturedChannelID, capturedFwdInfo, allMessageIDs); err != nil {
+						fmt.Printf("❌ 自动克隆转发消息失败 (message_id=%d, grouped_id=%d, channel_id=%d): %v\n", capturedMsg.ID, capturedGroupID, capturedChannelID, err)
+					}
+				}(groupedID, peerID, msg, fwdInfo)
 				// 跳过后续处理（不提取订阅链接等）
 				return 0, 0, nil
 			} else {
 				// 单条消息，立即处理
 				fmt.Printf("✅ 检测到转发消息，准备自动克隆 (message_id=%d, channel_id=%d)\n", msg.ID, peerID)
-				
+
 				go func() {
 					if err := p.recloneForwardedMessage(context.Background(), msg, peerID, fwdInfo); err != nil {
 						fmt.Printf("❌ 自动克隆转发消息失败 (message_id=%d, channel_id=%d): %v\n", msg.ID, peerID, err)
@@ -325,11 +320,11 @@ func (p *MessageProcessor) processMessageContent(ctx context.Context, msg *tg.Me
 
 							var response SubscriptionResponse
 							if err := json.Unmarshal(body, &response); err != nil {
-							// fmt.Printf("[DEBUG] 批量节点响应解析失败 (error=%v, body=%s, status=%d)\n", err, string(body), resp.StatusCode)
+								// fmt.Printf("[DEBUG] 批量节点响应解析失败 (error=%v, body=%s, status=%d)\n", err, string(body), resp.StatusCode)
 								// 如果是 200 状态码但解析失败，可能是纯文本响应，视为成功
 								if resp.StatusCode == 200 {
 									nodeCount = len(nodes)
-								// fmt.Printf("[DEBUG] %s批量节点添加成功 (node_count=%d)\n", msgTypeLabel, len(nodes))
+									// fmt.Printf("[DEBUG] %s批量节点添加成功 (node_count=%d)\n", msgTypeLabel, len(nodes))
 								}
 							} else {
 								// 处理响应
@@ -698,7 +693,7 @@ func (p *MessageProcessor) fetchChannelHistory(ctx context.Context, channelID in
 	fmt.Printf("✅ 频道名称: %s 频道ID:%d 历史消息:%d 订阅/节点数:%d 有效订阅:%d 有效节点:%d\n",
 		channelTitle, channelID, len(messages), totalLinks, totalSubs, totalNodes)
 	// fmt.Printf("[DEBUG] 历史消息处理完成 (频道名称=%s, 频道ID=%d, 历史消息=%d, 订阅/节点数=%d, 有效订阅=%d, 有效节点=%d)\n",
-		// channelTitle, channelID, len(messages), totalLinks, totalSubs, totalNodes)
+	// channelTitle, channelID, len(messages), totalLinks, totalSubs, totalNodes)
 	return nil
 }
 
@@ -782,23 +777,23 @@ func (p *MessageProcessor) getChannelAccessHash(ctx context.Context, channelID i
 func (p *MessageProcessor) recloneForwardedMessageGroup(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader, messageIDs []int) error {
 	// 构造消息链接（私有频道格式）
 	msgLink := fmt.Sprintf("https://t.me/c/%d/%d", channelID, msg.ID)
-	
+
 	fmt.Printf("✅ 开始克隆转发消息集合 (原消息ID=%d, 频道ID=%d, 消息链接=%s, 消息数量=%d)\n", msg.ID, channelID, msgLink, len(messageIDs))
-	
+
 	// 使用现有的 forwardFromLink 方法，Single 设为 false：让 tdl 自动检测消息集合并作为专辑转发
-	if err := p.forwardFromLink(ctx, msgLink, &channelID, nil, false); err != nil {
+	if err := p.forwardFromLink(ctx, msgLink, &channelID, nil, false, msg); err != nil {
 		return fmt.Errorf("克隆转发失败: %w", err)
 	}
-	
+
 	fmt.Printf("✅ 克隆转发成功 (原消息ID=%d, 频道ID=%d)\n", msg.ID, channelID)
-	
+
 	// 克隆成功后删除所有原始带转发头的消息
 	accessHash, err := p.getChannelAccessHash(ctx, channelID)
 	if err != nil {
 		fmt.Printf("⚠️  获取频道 AccessHash 失败（已成功克隆） (原消息IDs=%v, 频道ID=%d): %v\n", messageIDs, channelID, err)
 		return nil
 	}
-	
+
 	// 使用 ChannelsDeleteMessages API 删除所有消息
 	deleteRequest := &tg.ChannelsDeleteMessagesRequest{
 		Channel: &tg.InputChannel{
@@ -807,7 +802,7 @@ func (p *MessageProcessor) recloneForwardedMessageGroup(ctx context.Context, msg
 		},
 		ID: messageIDs, // 删除所有消息
 	}
-	
+
 	affectedMessages, err := p.api.ChannelsDeleteMessages(ctx, deleteRequest)
 	if err != nil {
 		fmt.Printf("⚠️  删除原始转发消息集合失败（已成功克隆） (原消息IDs=%v, 频道ID=%d): %v\n", messageIDs, channelID, err)
@@ -815,24 +810,24 @@ func (p *MessageProcessor) recloneForwardedMessageGroup(ctx context.Context, msg
 		fmt.Printf("🗑️ 已删除原始转发消息集合 (消息IDs=%v, 频道ID=%d, 数量=%d, pts=%d, count=%d)\n",
 			messageIDs, channelID, len(messageIDs), affectedMessages.Pts, affectedMessages.PtsCount)
 	}
-	
+
 	return nil
 }
 
 func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.Message, channelID int64, fwdInfo tg.MessageFwdHeader) error {
 	// 构造消息链接（私有频道格式）
 	msgLink := fmt.Sprintf("https://t.me/c/%d/%d", channelID, msg.ID)
-	
+
 	fmt.Printf("✅ 开始克隆转发消息 (原消息ID=%d, 频道ID=%d, 消息链接=%s)\n", msg.ID, channelID, msgLink)
-	
+
 	// 使用现有的 forwardFromLink 方法，配置中的 forward_mode 已设为 clone
 	// Single 设为 false 以提高批量转发效率
-	if err := p.forwardFromLink(ctx, msgLink, &channelID, nil, false); err != nil {
+	if err := p.forwardFromLink(ctx, msgLink, &channelID, nil, false, msg); err != nil {
 		return fmt.Errorf("克隆转发失败: %w", err)
 	}
-	
+
 	fmt.Printf("✅ 克隆转发成功 (原消息ID=%d, 频道ID=%d)\n", msg.ID, channelID)
-	
+
 	// 克隆成功后删除原始带转发头的消息
 	// 获取频道的 AccessHash
 	accessHash, err := p.getChannelAccessHash(ctx, channelID)
@@ -840,7 +835,7 @@ func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.
 		fmt.Printf("⚠️  获取频道 AccessHash 失败（已成功克隆） (原消息ID=%d, 频道ID=%d): %v\n", msg.ID, channelID, err)
 		return nil // 不返回错误，因为克隆已经成功
 	}
-	
+
 	// 使用 ChannelsDeleteMessages API 删除频道消息
 	deleteRequest := &tg.ChannelsDeleteMessagesRequest{
 		Channel: &tg.InputChannel{
@@ -849,7 +844,7 @@ func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.
 		},
 		ID: []int{msg.ID},
 	}
-	
+
 	affectedMessages, err := p.api.ChannelsDeleteMessages(ctx, deleteRequest)
 	if err != nil {
 		fmt.Printf("⚠️  删除原始转发消息失败（已成功克隆） (原消息ID=%d, 频道ID=%d): %v\n", msg.ID, channelID, err)
@@ -858,6 +853,6 @@ func (p *MessageProcessor) recloneForwardedMessage(ctx context.Context, msg *tg.
 		fmt.Printf("🗑️ 已删除原始转发消息 (消息ID=%d, 频道ID=%d, pts=%d, count=%d)\n",
 			msg.ID, channelID, affectedMessages.Pts, affectedMessages.PtsCount)
 	}
-	
+
 	return nil
 }
