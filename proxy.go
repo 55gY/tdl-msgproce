@@ -71,11 +71,8 @@ func (ps *ProxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 复制请求头
-	for name, values := range r.Header {
-		proxyReq.Header[name] = values
-	}
-	proxyReq.Header.Del("Accept-Encoding")
+	// 不透传客户端请求头，避免上游根据浏览器头返回差异内容
+	proxyReq.Header.Set("User-Agent", "clash-verge/v2.4.7")
 
 	// 创建 HTTP 客户端，设置超时
 	client := &http.Client{

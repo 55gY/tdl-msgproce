@@ -704,7 +704,8 @@ ls -la ~/.tdl/data/
 - 程序自身错误（如代理 `token` 错误、缺少 `url` 参数、目标不可达）会返回对应 `4xx/5xx`。
 - 上游接口返回码会被透传，代理仅透传上游响应内容。
 - 代理响应 `Content-Type` 固定为 `text/plain`，不透传上游响应头。
-- 代理会移除转发请求头中的 `Accept-Encoding`，避免上游返回 gzip 压缩体导致浏览器或调试工具显示乱码/空白。
+- 代理默认不透传客户端请求头（如 `Accept`、`Accept-Language`、`Cookie`、`User-Agent` 等），避免上游按浏览器特征返回差异内容。
+- 代理会使用固定上游 `User-Agent: clash-verge/v2.4.7`，保证各客户端行为一致。
 
 **5. 自动下载失败**
 手动下载：
