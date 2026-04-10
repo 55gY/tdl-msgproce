@@ -75,6 +75,7 @@ func (ps *ProxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	for name, values := range r.Header {
 		proxyReq.Header[name] = values
 	}
+	proxyReq.Header.Del("Accept-Encoding")
 
 	// 创建 HTTP 客户端，设置超时
 	client := &http.Client{
@@ -92,8 +93,8 @@ func (ps *ProxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// 固定响应类型，不透传上游响应头
 	w.Header().Set("Content-Type", "text/plain")
 
-	// 上游状态码统一映射为 200，仅透传响应内容
-	w.WriteHeader(http.StatusOK)
+	// 透传上游响应状态码，仅透传响应内容
+	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
 
