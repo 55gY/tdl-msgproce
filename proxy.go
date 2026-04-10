@@ -92,8 +92,8 @@ func (ps *ProxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// 固定响应类型，不透传上游响应头
 	w.Header().Set("Content-Type", "text/plain")
 
-	// 写入状态码和响应体
-	w.WriteHeader(resp.StatusCode)
+	// 上游状态码统一映射为 200，仅透传响应内容
+	w.WriteHeader(http.StatusOK)
 	io.Copy(w, resp.Body)
 }
 

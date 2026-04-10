@@ -699,6 +699,12 @@ ping -c 3 telegram.org
 ls -la ~/.tdl/data/
 ```
 
+**5. 代理接口返回码说明（`/sub`）**
+
+- 程序自身错误（如代理 `token` 错误、缺少 `url` 参数、目标不可达）会返回对应 `4xx/5xx`。
+- 上游接口返回码会统一映射为 `200`，仅透传上游响应内容，便于客户端稳定读取响应体。
+- 代理响应 `Content-Type` 固定为 `text/plain`，不透传上游响应头。
+
 **5. 自动下载失败**
 手动下载：
 - tdl: https://github.com/iyear/tdl/releases
