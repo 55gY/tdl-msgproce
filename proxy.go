@@ -89,10 +89,8 @@ func (ps *ProxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// 复制响应头
-	for name, values := range resp.Header {
-		w.Header()[name] = values
-	}
+	// 固定响应类型，不透传上游响应头
+	w.Header().Set("Content-Type", "text/plain")
 
 	// 写入状态码和响应体
 	w.WriteHeader(resp.StatusCode)
