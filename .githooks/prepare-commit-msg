@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+commit_msg_file="$1"
+
+# 不重复追加版本号；支持 v1.0.58 和 1.0.58 两种已有格式。
+if grep -Eq '(^|[^0-9])v?[0-9]+\.[0-9]+\.[0-9]+([^0-9]|$)' "$commit_msg_file"; then
+    exit 0
+fi
+
+latest="$(
+    {
+        git tag --list 'v1.0.*'
+        git log --all --format='%B'
+    } | grep -Eo 'v?1\.0\.[0-9]+' | sed 's/^v//' | sort -V | tail -n 1
+)"
+
+if [[ -z "$latest" ]]; then
+    next=0
+else
+    next="${latest##*.}"
+    next=$((next + 1))
+fi
+
+printf '\n%s\n' "v1.0.${next}" >> "$commit_msg_file"

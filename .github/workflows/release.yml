@@ -51,7 +51,7 @@ jobs:
           exit 0
 
       - name: Create and push tag
-        if: steps.check_version.outputs.HAS_VERSION == 'true' && github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        if: steps.check_version.outputs.HAS_VERSION == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         run: |
           VERSION="${{ steps.check_version.outputs.VERSION }}"
           git config user.name "github-actions[bot]"
