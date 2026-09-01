@@ -1,5 +1,5 @@
 // tdl-msgproce - 消息转发功能核心实现
-// 
+//
 // 日志输出规范：
 // - 使用 fmt.Printf() 输出用户可见的日志信息
 // - 调试日志使用 // fmt.Printf() 注释格式
@@ -29,6 +29,8 @@ type memoryStorage struct {
 	mu   sync.RWMutex
 	data map[string][]byte
 }
+
+var stdoutCaptureMu sync.Mutex
 
 func newMemoryStorage() storage.Storage {
 	return &memoryStorage{
@@ -157,21 +159,21 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 		default:
 			mode = forwarder.ModeClone
 		}
-		
+
 		opts := forward.Options{
-			From:   []string{link},            // 转发源：频道链接
+			From:   []string{link},              // 转发源：频道链接
 			To:     fmt.Sprintf("%d", targetID), // 转发目标：目标频道或群组 ID
-			Mode:   mode,                      // 转发模式：clone(克隆) 或 direct(直接转发)
-			Silent: false,                     // 是否静默转发：true 时不通知接收者
-			DryRun: false,                     // 是否空运行：true 时仅模拟不实际执行
-			Single: single,                    // 是否单条模式：true 时逐条转发，false 时批量转发
-			Desc:   false,                     // 是否降序
+			Mode:   mode,                        // 转发模式：clone(克隆) 或 direct(直接转发)
+			Silent: false,                       // 是否静默转发：true 时不通知接收者
+			DryRun: false,                       // 是否空运行：true 时仅模拟不实际执行
+			Single: single,                      // 是否单条模式：true 时逐条转发，false 时批量转发
+			Desc:   false,                       // 是否降序
 		}
-	if msg != nil {
-		re := regexp.MustCompile(`#[^\s#]+`)
-		tags := re.FindAllString(msg.Message, -1)
-		opts.Edit = strconv.Quote(strings.Join(tags, " "))
-	}
+		if msg != nil {
+			re := regexp.MustCompile(`#[^\s#]+`)
+			tags := re.FindAllString(msg.Message, -1)
+			opts.Edit = strconv.Quote(strings.Join(tags, " "))
+		}
 		client := p.ext.Client()
 		if err := forward.Run(ctx, client, kvd, opts); err != nil {
 			return fmt.Errorf("转发失败: %w", err)
@@ -179,6 +181,10 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 		fmt.Printf("✅ 转发成功 (link=%s)\n", link)
 		return nil
 	}
+
+	// tdl 通过标准输出报告进度；替换进程级 stdout/stderr 时必须串行化。
+	stdoutCaptureMu.Lock()
+	defer stdoutCaptureMu.Unlock()
 
 	// 保存原始 stdout 和 stderr
 	oldStdout := os.Stdout
@@ -189,8 +195,16 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 	}()
 
 	// 创建管道捕获输出
-	rOut, wOut, _ := os.Pipe()
-	rErr, wErr, _ := os.Pipe()
+	rOut, wOut, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("创建 stdout 管道失败: %w", err)
+	}
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		rOut.Close()
+		wOut.Close()
+		return fmt.Errorf("创建 stderr 管道失败: %w", err)
+	}
 	os.Stdout = wOut
 	os.Stderr = wErr
 
@@ -227,23 +241,23 @@ func (p *MessageProcessor) forwardFromLink(ctx context.Context, link string, tar
 
 	// 准备 forward 选项
 	opts := forward.Options{
-		From:   []string{link},            // 转发源：频道链接
+		From:   []string{link},              // 转发源：频道链接
 		To:     fmt.Sprintf("%d", targetID), // 转发目标：目标频道或群组 ID
-		Mode:   mode,                      // 转发模式：clone(克隆) 或 direct(直接转发)
-		Silent: false,                     // 是否静默转发：true 时不通知接收者
-		DryRun: false,                     // 是否空运行：true 时仅模拟不实际执行
-		Single: single,                    // 是否单条模式：true 时逐条转发，false 时批量转发
-		Desc:   false,                     // 是否降序
+		Mode:   mode,                        // 转发模式：clone(克隆) 或 direct(直接转发)
+		Silent: false,                       // 是否静默转发：true 时不通知接收者
+		DryRun: false,                       // 是否空运行：true 时仅模拟不实际执行
+		Single: single,                      // 是否单条模式：true 时逐条转发，false 时批量转发
+		Desc:   false,                       // 是否降序
 	}
-		if msg != nil {
-			re := regexp.MustCompile(`#[^\s#]+`)
-			tags := re.FindAllString(msg.Message, -1)
-			opts.Edit = strconv.Quote(strings.Join(tags, " "))
-		}
+	if msg != nil {
+		re := regexp.MustCompile(`#[^\s#]+`)
+		tags := re.FindAllString(msg.Message, -1)
+		opts.Edit = strconv.Quote(strings.Join(tags, " "))
+	}
 
 	// 调用 tdl 的 forward 功能
 	client := p.ext.Client()
-	err := forward.Run(ctx, client, kvd, opts)
+	err = forward.Run(ctx, client, kvd, opts)
 
 	// 关闭写入端，等待读取完成
 	wOut.Close()
@@ -303,5 +317,3 @@ func (p *MessageProcessor) parseJSONMessages(jsonFilePath string) ([]string, err
 
 	return links, nil
 }
-
-

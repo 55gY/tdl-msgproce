@@ -1,5 +1,5 @@
 // tdl-msgproce - HTTP 代理服务器（用于订阅解析）
-// 
+//
 // 日志输出规范：
 // - 使用 fmt.Printf() 输出用户可见的日志信息
 // - 调试日志使用 // fmt.Printf() 注释格式
@@ -10,7 +10,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -23,17 +26,28 @@ type ProxyServer struct {
 
 // NewProxyServer 创建新的代理服务器实例
 func NewProxyServer(cfg *ProxyConfig) *ProxyServer {
+	maxConcurrent := cfg.MaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
 	ps := &ProxyServer{
 		cfg:       cfg,
-		semaphore: make(chan struct{}, cfg.MaxConcurrent),
+		semaphore: make(chan struct{}, maxConcurrent),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sub", ps.handleProxy)
 
+	timeout := time.Duration(cfg.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
 	ps.server = &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
-		Handler: mux,
+		Addr:              fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      timeout,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	return ps
@@ -64,8 +78,13 @@ func (ps *ProxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateProxyTarget(r.Context(), targetURL); err != nil {
+		http.Error(w, "Forbidden target URL", http.StatusForbidden)
+		return
+	}
+
 	// 创建中转请求
-	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 	if err != nil {
 		http.Error(w, "Invalid target URL", http.StatusBadRequest)
 		return
@@ -75,9 +94,11 @@ func (ps *ProxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	proxyReq.Header.Set("User-Agent", "clash-verge/v2.4.7")
 
 	// 创建 HTTP 客户端，设置超时
-	client := &http.Client{
-		Timeout: time.Duration(ps.cfg.Timeout) * time.Second,
+	timeout := time.Duration(ps.cfg.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 120 * time.Second
 	}
+	client := &http.Client{Timeout: timeout}
 
 	// 执行请求
 	resp, err := client.Do(proxyReq)
@@ -92,7 +113,33 @@ func (ps *ProxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	// 透传上游响应状态码，仅透传响应内容
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		fmt.Printf("⚠️ 代理响应传输失败: %v\n", err)
+	}
+}
+
+func validateProxyTarget(ctx context.Context, rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" || u.User != nil {
+		return fmt.Errorf("无效目标地址")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("仅允许 HTTP/HTTPS")
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return fmt.Errorf("禁止本地域名")
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return fmt.Errorf("无法解析目标地址: %w", err)
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("禁止访问内网地址")
+		}
+	}
+	return nil
 }
 
 // Start 启动代理服务器

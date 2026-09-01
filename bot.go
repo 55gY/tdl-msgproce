@@ -16,9 +16,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
-	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -246,10 +243,7 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 				"2️⃣ 添加订阅\n"+
 				"   • 发送订阅链接 (http/https 格式)\n"+
 				"   • 自动添加到监听系统\n\n"+
-				"3️⃣ SS 配置管理\n"+
-				"   • /ss config - 查看 SS 配置\n"+
-				"   • /ss auto - 自动安装/重置 SS\n\n"+
-				"4️⃣ 查看状态\n"+
+				"3️⃣ 查看状态\n"+
 				"   • 使用 /status 查看运行状态\n\n"+
 				"💡 提示：文件名即为转发目标，发送JSON文件后会自动验证和清理无效消息！")
 		return
@@ -263,58 +257,6 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 			"🎯 转发目标: %d",
 			p.messageCount, p.forwardCount, p.config.Bot.ForwardTarget)
 		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID, status)
-		return
-	}
-
-	// 处理 /ss 命令
-	if strings.HasPrefix(text, "/ss") {
-		parts := strings.Fields(text)
-		if len(parts) < 2 {
-			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-				"❌ 用法错误\n\n"+
-					"使用方法: /ss [config|auto]\n\n"+
-					"• /ss config - 查看 SS 配置\n"+
-					"• /ss auto - 自动安装/重置 SS")
-			return
-		}
-
-		subCmd := parts[1]
-		// 验证子命令（白名单）
-		if subCmd != "config" && subCmd != "auto" {
-			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-				"❌ 无效的子命令\n\n"+
-					"支持的命令:\n"+
-					"• /ss config - 查看 SS 配置\n"+
-					"• /ss auto - 自动安装/重置 SS")
-			return
-		}
-
-		// 发送执行中的提示
-		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-			fmt.Sprintf("⏳ 正在执行 /ss %s...\n\n下载并执行脚本中，最多等待 5 分钟", subCmd))
-
-		// 异步执行脚本
-		go func() {
-			fmt.Printf("✅ 执行 SS 命令 (userID=%d, command=%s)\n", msg.From.ID, subCmd)
-
-			output, err := p.executeSSCommand(ctx, subCmd)
-			if err != nil {
-				fmt.Printf("❌ SS 命令执行失败 (command=%s): %v\n", subCmd, err)
-				p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-					fmt.Sprintf("❌ 执行失败:\n\n%s", err.Error()))
-				return
-			}
-
-			// 截断输出到 4000 字符（Telegram 限制）
-			if len(output) > 4000 {
-				output = output[:3900] + "\n\n... (输出过长已截断)"
-			}
-
-			fmt.Printf("✅ SS 命令执行成功 (command=%s)\n", subCmd)
-
-			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-				fmt.Sprintf("✅ 执行完成:\n\n%s", output))
-		}()
 		return
 	}
 
@@ -1307,8 +1249,13 @@ func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Contex
 				task.Progress = percent
 			}
 
-			// 执行转发（传入目标参数）
-			err := p.forwardFromLink(ctx, task.Link, &customTarget, onProgress, true, nil)
+			// 根据任务类型执行 Telegram 转发或 Twitter 下载上传。
+			var err error
+			if task.Type == "twitter_download" {
+				err = p.processTwitterLink(ctx, task.Link, task.Caption, onProgress)
+			} else {
+				err = p.forwardFromLink(ctx, task.Link, &customTarget, onProgress, true, nil)
+			}
 
 			// 检查context是否被取消
 			if ctx.Err() == context.Canceled {
@@ -1554,134 +1501,6 @@ func (p *MessageProcessor) handleCallbackQuery(ctx context.Context, bot *tgbotap
 	}
 }
 
-// downloadSSScript 从 GitHub 下载脚本到临时文件
-func (p *MessageProcessor) downloadSSScript() (string, error) {
-	const scriptURL = "https://raw.githubusercontent.com/55gY/cmd/main/cmd.sh"
-
-	// 验证 HTTPS
-	if !strings.HasPrefix(scriptURL, "https://") {
-		return "", fmt.Errorf("安全错误：仅允许 HTTPS URL")
-	}
-
-	// 创建 HTTP 客户端（参考现有代码模式）
-	client := &http.Client{
-		Timeout: 120 * time.Second,
-	}
-
-	// 创建请求
-	req, err := http.NewRequest("GET", scriptURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	// fmt.Printf("[DEBUG] 下载 SS 脚本 (url=%s)\n", scriptURL)
-
-	// 发送请求
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("下载失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// 检查状态码
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载失败，HTTP %d", resp.StatusCode)
-	}
-
-	// 创建临时文件
-	tmpFile, err := os.CreateTemp("", "cmd-*.sh")
-	if err != nil {
-		return "", fmt.Errorf("创建临时文件失败: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	// 写入脚本内容
-	_, err = io.Copy(tmpFile, resp.Body)
-	tmpFile.Close()
-	if err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("写入脚本失败: %w", err)
-	}
-
-	// 设置可执行权限（仅 Unix 系统）
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(tmpPath, 0700); err != nil {
-			os.Remove(tmpPath)
-			return "", fmt.Errorf("设置执行权限失败: %w", err)
-		}
-	}
-
-	// fmt.Printf("[DEBUG] 脚本下载成功 (tmpPath=%s)\n", tmpPath)
-	return tmpPath, nil
-}
-
-// executeSSCommand 执行 SS 命令（下载脚本并执行）
-func (p *MessageProcessor) executeSSCommand(ctx context.Context, subCmd string) (string, error) {
-	// 下载脚本
-	tmpPath, err := p.downloadSSScript()
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(tmpPath) // 确保清理临时文件
-
-	// 创建 5 分钟超时的 context
-	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	// 检测系统并找到 bash
-	var bashPath string
-	if runtime.GOOS == "windows" {
-		// Windows: 查找 bash（Git Bash 或 WSL）
-		if path, err := exec.LookPath("bash"); err == nil {
-			bashPath = path
-		} else {
-			return "", fmt.Errorf("Windows 系统需要 Git Bash 或 WSL\n请安装 Git for Windows: https://git-scm.com/")
-		}
-	} else {
-		// Linux/macOS
-		bashPath = "/bin/bash"
-	}
-
-	// fmt.Printf("[DEBUG] 执行脚本 (bash=%s, script=%s, subCmd=%s)\n", bashPath, tmpPath, subCmd)
-
-	// 执行脚本：bash tmpPath ss subCmd
-	cmd := exec.CommandContext(execCtx, bashPath, tmpPath, "ss", subCmd)
-
-	// 捕获标准输出和错误输出
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// 执行命令
-	err = cmd.Run()
-
-	// 合并输出
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\n" + stderr.String()
-	}
-
-	// 移除 ANSI 颜色代码（如 [0;34m, [0;32m, [0m, [1;33m 等）
-	// 匹配 ESC[ 序列和简化的 [ 序列
-	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*m|\[0;[0-9]+m|\[1;[0-9]+m|\[0m`)
-	output = ansiRegex.ReplaceAllString(output, "")
-
-	// 检查错误
-	if err != nil {
-		// 检查是否超时
-		if execCtx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("脚本执行超过 5 分钟已终止")
-		}
-		// 返回错误和输出
-		if output != "" {
-			return "", fmt.Errorf("脚本执行失败: %w\n\n输出:\n%s", err, output)
-		}
-		return "", fmt.Errorf("脚本执行失败: %w", err)
-	}
-
-	return output, nil
-}
-
 // handleDocumentMessage 处理文档文件消息
 func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbotapi.BotAPI, taskManager *TaskManager, msg *tgbotapi.Message) {
 	doc := msg.Document
@@ -1724,6 +1543,10 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 			doc.FileName,
 			float64(doc.FileSize)/(1024*1024),
 			forwardTarget))
+	if statusMsg == nil {
+		fmt.Printf("❌ 无法发送文件处理状态消息 (fileName=%s)\n", doc.FileName)
+		return
+	}
 
 	// 获取文件下载链接
 	fileConfig := tgbotapi.FileConfig{FileID: doc.FileID}
@@ -1735,36 +1558,51 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 		return
 	}
 
-	// 使用当前目录，文件名保持不变
-	tmpFilePath := doc.FileName
-
-	// 下载文件
+	// 仅使用随机临时文件，避免用户文件名造成路径穿越或覆盖现有文件。
 	fileURL := file.Link(bot.Token)
-	resp, err := http.Get(fileURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 创建下载请求失败: "+err.Error())
+		return
+	}
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("❌ 下载文件失败: %v\n", err)
-		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-			"❌ 下载文件失败: "+err.Error())
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 下载文件失败: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
-
-	// 保存文件
-	outFile, err := os.Create(tmpFilePath)
-	if err != nil {
-		fmt.Printf("❌ 创建文件失败: %v\n", err)
-		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-			"❌ 创建文件失败: "+err.Error())
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("Telegram 文件下载返回 HTTP %d", resp.StatusCode)
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 下载文件失败: "+err.Error())
 		return
 	}
-
-	written, err := io.Copy(outFile, resp.Body)
-	outFile.Close()
+	const maxJSONFileSize int64 = 100 * 1024 * 1024
+	if resp.ContentLength > maxJSONFileSize {
+		err := fmt.Errorf("文件超过 100 MB 限制")
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 下载文件失败: "+err.Error())
+		return
+	}
+	tmpFile, err := os.CreateTemp("", "tdl-msgproce-json-*.json")
 	if err != nil {
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 创建临时文件失败: "+err.Error())
+		return
+	}
+	tmpFilePath := tmpFile.Name()
+	written, err := io.Copy(tmpFile, io.LimitReader(resp.Body, maxJSONFileSize+1))
+	closeErr := tmpFile.Close()
+	if err != nil || closeErr != nil {
+		if err == nil {
+			err = closeErr
+		}
 		fmt.Printf("❌ 保存文件失败: %v\n", err)
-		os.Remove(tmpFilePath)
-		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-			"❌ 保存文件失败: "+err.Error())
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 保存文件失败: "+err.Error())
+		return
+	}
+	if written > maxJSONFileSize {
+		err := fmt.Errorf("实际文件超过 100 MB 限制")
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 下载文件失败: "+err.Error())
 		return
 	}
 
