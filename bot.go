@@ -31,7 +31,8 @@ type ForwardTask struct {
 	Caption       string // Twitter 上传时使用的标签 caption
 	UserID        int64
 	Status        string   // pending, running, completed, cancelled, failed
-	Progress      int      // 0-100 进度百分比
+	Progress      int      // 当前阶段 0-100 进度百分比
+	Stage         string   // Twitter: 下载中或上传中
 	ProgressLines []string // 最近的进度输出行（用于调试）
 	Error         string
 	Cancelled     bool
@@ -927,7 +928,7 @@ func (p *MessageProcessor) buildBatchStatusText(batchID int, tasks []*ForwardTas
 		// 判断任务类型
 		switch task.Type {
 		case "twitter_download":
-			taskType = "𝕏 Twitter下载"
+			taskType = "𝕏 Twitter"
 		case "telegram_forward":
 			taskType = "🔗 Telegram转发"
 		default:
@@ -944,7 +945,7 @@ func (p *MessageProcessor) buildBatchStatusText(batchID int, tasks []*ForwardTas
 			statusText = "待处理"
 		case "running":
 			statusIcon = "🔄"
-			statusText = fmt.Sprintf("%s中 %d%%", taskTypeLabel(task.Type), task.Progress)
+			statusText = taskRunningStatus(task)
 		case "completed":
 			statusIcon = "✅"
 			statusText = "已完成"
@@ -1021,7 +1022,7 @@ func (p *MessageProcessor) buildGroupedBatchStatusText(batchID int, allTasks []*
 			statusText = "待处理"
 		case "running":
 			statusIcon = "🔄"
-			statusText = fmt.Sprintf("%s中 %d%%", taskTypeLabel(task.Type), task.Progress)
+			statusText = taskRunningStatus(task)
 		case "completed":
 			statusIcon = "✅"
 			statusText = "已完成"
@@ -1050,6 +1051,17 @@ func (p *MessageProcessor) buildGroupedBatchStatusText(batchID int, allTasks []*
 	return sb.String()
 }
 
+func taskRunningStatus(task *ForwardTask) string {
+	if task.Type == "twitter_download" {
+		stage := task.Stage
+		if stage == "" {
+			stage = "下载中"
+		}
+		return fmt.Sprintf("%s %d%%", stage, task.Progress)
+	}
+	return fmt.Sprintf("%s中 %d%%", taskTypeLabel(task.Type), task.Progress)
+}
+
 // buildBatchStatusText 构建批次状态文本（原有函数）
 func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot *tgbotapi.BotAPI, taskManager *TaskManager, batch *BatchTask, customTarget int64) {
 	defer taskManager.RemoveBatch(batch.UserID, batch.BatchID)
@@ -1074,6 +1086,9 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 		// 更新任务状态为运行中
 		task.Status = "running"
 		task.Progress = 0
+		if task.Type == "twitter_download" {
+			task.Stage = "下载中"
+		}
 		statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)
 		p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
 
@@ -1091,6 +1106,13 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 		onProgress := func(percent int, line string) {
 			// fmt.Printf("[DEBUG] 进度回调 (percent=%d, line=%s)\n", percent, line)
 			task.Progress = percent
+			if task.Type == "twitter_download" {
+				if strings.Contains(line, "上传") {
+					task.Stage = "上传中"
+				} else {
+					task.Stage = "下载中"
+				}
+			}
 
 			// 只在进度变化时保存新行（避免重复）
 			if percent != lastPercent {
@@ -1104,7 +1126,7 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 			}
 
 			// 限制更新频率；关键阶段必须立即刷新，避免 tdl 上传期间长期显示 0%
-			keyStage := percent <= 10 || percent >= 50
+			keyStage := percent <= 10 || percent == 15 || percent >= 50
 			if keyStage || time.Since(lastUpdate) > updateInterval {
 				lastUpdate = time.Now()
 				// fmt.Printf("[DEBUG] 更新Bot消息 (taskID=%d, percent=%d)\n", task.ID, percent)
@@ -1260,6 +1282,13 @@ func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Contex
 			// 进度回调（单链接转发保持0%直到完成）
 			onProgress := func(percent int, line string) {
 				task.Progress = percent
+				if task.Type == "twitter_download" {
+					if strings.Contains(line, "上传") {
+						task.Stage = "上传中"
+					} else {
+						task.Stage = "下载中"
+					}
+				}
 			}
 
 			// 根据任务类型执行 Telegram 转发或 Twitter 下载上传。
@@ -1366,6 +1395,9 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		// 更新任务状态为运行中
 		task.Status = "running"
 		task.Progress = 0
+		if task.Type == "twitter_download" {
+			task.Stage = "下载中"
+		}
 		statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)
 		p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
 
@@ -1383,6 +1415,13 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		onProgress := func(percent int, line string) {
 			// fmt.Printf("[DEBUG] 进度回调 (percent=%d, line=%s)\n", percent, line)
 			task.Progress = percent
+			if task.Type == "twitter_download" {
+				if strings.Contains(line, "上传") {
+					task.Stage = "上传中"
+				} else {
+					task.Stage = "下载中"
+				}
+			}
 
 			// 只在进度变化时保存新行（避免重复）
 			if percent != lastPercent {
@@ -1396,7 +1435,7 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 			}
 
 			// 限制更新频率；关键阶段必须立即刷新，避免 tdl 上传期间长期显示 0%
-			keyStage := percent <= 10 || percent >= 50
+			keyStage := percent <= 10 || percent == 15 || percent >= 50
 			if keyStage || time.Since(lastUpdate) > updateInterval {
 				lastUpdate = time.Now()
 				// fmt.Printf("[DEBUG] 更新Bot消息 (taskID=%d, percent=%d)\n", task.ID, percent)

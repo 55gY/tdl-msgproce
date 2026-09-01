@@ -412,7 +412,7 @@ func (p *MessageProcessor) processTwitterLink(ctx context.Context, link, caption
 		func() {
 			defer os.Remove(path)
 			if onProgress != nil {
-				onProgress(50+index*45/len(media), fmt.Sprintf("上传第 %d/%d 个媒体", index+1, len(media)))
+				onProgress(15, fmt.Sprintf("上传第 %d/%d 个媒体", index+1, len(media)))
 			}
 			photo := item.Type == "photo"
 			uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
@@ -424,7 +424,7 @@ func (p *MessageProcessor) processTwitterLink(ctx context.Context, link, caption
 			}()
 			ticker := time.NewTicker(15 * time.Second)
 			defer ticker.Stop()
-			progress := 55
+			progress := 15
 			for {
 				select {
 				case err = <-result:
@@ -433,7 +433,7 @@ func (p *MessageProcessor) processTwitterLink(ctx context.Context, link, caption
 					}
 					return
 				case <-ticker.C:
-					if progress < 95 {
+					if progress < 90 {
 						progress += 5
 					}
 					if onProgress != nil {
