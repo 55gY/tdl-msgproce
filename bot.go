@@ -260,31 +260,30 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 		return
 	}
 
-	// 提取 Telegram 和 Twitter/X 链接。两类任务共用现有批处理、取消和状态反馈机制。
+	// 先提取并去重 Telegram/Twitter 任务链接，避免通用 HTTPS 解析将 X 链接当成订阅链接。
 	tgLinks := extractTelegramLinks(text)
 	twitterLinks := extractTwitterLinks(text)
-	links := append(append([]string{}, tgLinks...), twitterLinks...)
-	if len(links) == 0 {
-		// 检查是否是订阅链接或节点链接
-		allLinks := p.ExtractAllLinks(text)
-		if len(allLinks) > 0 {
-			nonTgLinks := make([]string, 0)
-			for _, link := range allLinks {
-				if !strings.Contains(link, "t.me") && len(extractTwitterLinks(link)) == 0 {
-					nonTgLinks = append(nonTgLinks, link)
-				}
-			}
-			if len(nonTgLinks) > 0 {
-				p.handleSubscriptionLinks(ctx, bot, msg, nonTgLinks)
-				return
-			}
-		}
+	links := uniqueBotLinks(append(append([]string{}, tgLinks...), twitterLinks...))
 
+	// 同一条 Bot 消息可以同时包含订阅链接和 Twitter/X 链接；订阅仍按原流程提交，Twitter 进入下载任务。
+	allLinks := p.ExtractAllLinks(text)
+	nonTgTwitterLinks := make([]string, 0, len(allLinks))
+	for _, link := range allLinks {
+		if strings.Contains(strings.ToLower(link), "t.me/") || len(extractTwitterLinks(link)) > 0 {
+			continue
+		}
+		nonTgTwitterLinks = append(nonTgTwitterLinks, link)
+	}
+	if len(nonTgTwitterLinks) > 0 {
+		p.handleSubscriptionLinks(ctx, bot, msg, uniqueBotLinks(nonTgTwitterLinks))
+	}
+
+	if len(links) == 0 {
 		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
 			"❌ 未找到有效链接\n\n"+
 				"请发送以下格式:\n"+
-				"• Telegram 链接: https://t.me/channel/123\n"+
-				"• Twitter/X 链接: https://x.com/user/status/123\n"+
+				"• Telegram 转发链接: https://t.me/channel/123\n"+
+				"• Twitter 下载链接: https://x.com/user/status/123\n"+
 				"• 频道用户名: @channel_username\n"+
 				"• 订阅链接: http/https 格式\n\n"+
 				"💡 批量转发请直接发送 JSON 文件")
@@ -624,6 +623,19 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 
 	// 更新状态消息
 	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, finalMsg)
+}
+
+func uniqueBotLinks(links []string) []string {
+	seen := make(map[string]struct{}, len(links))
+	result := make([]string, 0, len(links))
+	for _, link := range links {
+		if _, exists := seen[link]; exists {
+			continue
+		}
+		seen[link] = struct{}{}
+		result = append(result, link)
+	}
+	return result
 }
 
 // extractTelegramLinks 提取 Telegram 链接

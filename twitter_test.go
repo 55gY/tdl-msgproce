@@ -70,3 +70,14 @@ func TestProbeTwitterMediaSize(t *testing.T) {
 		t.Fatalf("unexpected result: size=%d err=%v", size, err)
 	}
 }
+
+func TestUniqueBotLinks(t *testing.T) {
+	got := uniqueBotLinks([]string{
+		"https://x.com/user/status/123",
+		"https://sub.example/a",
+		"https://x.com/user/status/123",
+	})
+	if len(got) != 2 || got[0] != "https://x.com/user/status/123" || got[1] != "https://sub.example/a" {
+		t.Fatalf("unexpected unique links: %#v", got)
+	}
+}
