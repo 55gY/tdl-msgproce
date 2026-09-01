@@ -861,3 +861,11 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 如果这个项目对你有帮助，请给一个 Star ⭐
 
 [![Star History Chart](https://api.star-history.com/svg?repos=55gY/tdl-msgproce&type=Date)](https://star-history.com/#55gY/tdl-msgproce&Date)
+
+## Twitter/X 媒体下载
+
+Bot 收到包含 `https://x.com/<用户>/status/<推文ID>` 或 `https://twitter.com/<用户>/status/<推文ID>` 的消息后，会自动解析推文中的图片、视频和 GIF，并通过 tdl 上传到现有的 `bot.forward_target`，无需新增目标频道配置。一次消息可以包含多个 Twitter/X 状态链接，每个状态链接作为一个独立任务执行；任务列表会区分“Telegram 转发”和“Twitter 下载”。
+
+上传 caption 只保留 Bot 消息正文中按现有转发规则提取出的 `#标签`，不会加入作者名或原始 X 链接。每个媒体在下载前必须通过 HTTP `Content-Length` 确认大小；单文件超过 2GiB，或媒体服务器未返回可靠文件大小时，程序会跳过该媒体、向 Bot 说明原因，并且不会创建临时媒体文件。已确认未超限的媒体下载到临时文件并上传，上传结束后自动清理。
+
+X GraphQL 请求默认使用用户脚本参考的公开 Bearer token。若运行环境需要额外的 X 会话信息，可通过环境变量 `X_GUEST_TOKEN` 和 `X_CSRF_TOKEN` 提供请求头值；未能取得有效推文数据时，Bot 会将 X 请求或解析错误显示在任务结果中。
