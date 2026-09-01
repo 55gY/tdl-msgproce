@@ -415,7 +415,35 @@ func (p *MessageProcessor) processTwitterLink(ctx context.Context, link, caption
 				onProgress(50+index*45/len(media), fmt.Sprintf("上传第 %d/%d 个媒体", index+1, len(media)))
 			}
 			photo := item.Type == "photo"
-			err = up.Run(ctx, p.client, newMemoryStorage(), up.Options{To: fmt.Sprintf("%d", p.config.Bot.ForwardTarget), Paths: []string{path}, Caption: caption, Photo: photo})
+			uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+			defer cancel()
+			fmt.Printf("📤 Twitter tdl 上传开始 (index=%d/%d, target=%d)\n", index+1, len(media), p.config.Bot.ForwardTarget)
+			result := make(chan error, 1)
+			go func() {
+				result <- up.Run(uploadCtx, p.client, newMemoryStorage(), up.Options{To: fmt.Sprintf("%d", p.config.Bot.ForwardTarget), Paths: []string{path}, Caption: caption, Photo: photo})
+			}()
+			ticker := time.NewTicker(15 * time.Second)
+			defer ticker.Stop()
+			progress := 55
+			for {
+				select {
+				case err = <-result:
+					if err == nil {
+						fmt.Printf("✅ Twitter tdl 上传完成 (index=%d/%d)\n", index+1, len(media))
+					}
+					return
+				case <-ticker.C:
+					if progress < 95 {
+						progress += 5
+					}
+					if onProgress != nil {
+						onProgress(progress, fmt.Sprintf("tdl 上传进行中，第 %d/%d 个媒体", index+1, len(media)))
+					}
+				case <-ctx.Done():
+					err = ctx.Err()
+					return
+				}
+			}
 		}()
 		if err != nil {
 			return fmt.Errorf("第 %d 个媒体上传失败: %w", index+1, err)
