@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/iyear/tdl/app/up"
@@ -20,6 +21,10 @@ const maxTwitterMediaSize int64 = 2 * 1024 * 1024 * 1024
 
 var twitterStatusRegex = regexp.MustCompile(`https?://(?:www\.)?(?:x|twitter)\.com/[^\s/]+/status/(\d+)`)
 var twitterGuestAuthorization = "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+var twitterGuestTokenCache struct {
+	sync.Mutex
+	value string
+}
 
 // TwitterMedia 描述一条 Tweet 中可上传的单个媒体。
 type TwitterMedia struct {
@@ -66,39 +71,121 @@ func createTwitterQueryURL(tweetID string) string {
 	return "https://x.com/i/api/graphql/zAz9764BcLZOJ0JU2wrd1A/TweetResultByRestId?" + values.Encode()
 }
 
-func (p *MessageProcessor) fetchTwitterJSON(ctx context.Context, tweetID string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, createTwitterQueryURL(tweetID), nil)
+func twitterGuestToken(ctx context.Context) (string, error) {
+	if token := os.Getenv("X_GUEST_TOKEN"); token != "" {
+		return token, nil
+	}
+	twitterGuestTokenCache.Lock()
+	defer twitterGuestTokenCache.Unlock()
+	if twitterGuestTokenCache.value != "" {
+		return twitterGuestTokenCache.value, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.x.com/1.1/guest/activate.json", nil)
 	if err != nil {
-		return nil, fmt.Errorf("创建 X 请求失败: %w", err)
+		return "", fmt.Errorf("创建 X guest token 请求失败: %w", err)
 	}
 	req.Header.Set("Authorization", twitterGuestAuthorization)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; tdl-msgproce)")
-	if guestToken := os.Getenv("X_GUEST_TOKEN"); guestToken != "" {
-		req.Header.Set("x-guest-token", guestToken)
-	}
-	if csrfToken := os.Getenv("X_CSRF_TOKEN"); csrfToken != "" {
-		req.Header.Set("x-csrf-token", csrfToken)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("请求 X GraphQL 失败: %w", err)
+		return "", fmt.Errorf("获取 X guest token 失败: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("X GraphQL 返回 HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("获取 X guest token 返回 HTTP %d", resp.StatusCode)
 	}
-	var result map[string]any
+	var result struct {
+		GuestToken string `json:"guest_token"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("解析 X GraphQL 响应失败: %w", err)
+		return "", fmt.Errorf("解析 X guest token 响应失败: %w", err)
 	}
-	if result["errors"] != nil {
-		return nil, fmt.Errorf("X GraphQL 返回错误: %v", result["errors"])
+	if result.GuestToken == "" {
+		return "", fmt.Errorf("X guest token 响应为空")
 	}
-	return result, nil
+	twitterGuestTokenCache.value = result.GuestToken
+	return result.GuestToken, nil
+}
+
+func invalidateTwitterGuestToken() {
+	if os.Getenv("X_GUEST_TOKEN") != "" {
+		return
+	}
+	twitterGuestTokenCache.Lock()
+	twitterGuestTokenCache.value = ""
+	twitterGuestTokenCache.Unlock()
+}
+
+func (p *MessageProcessor) fetchTwitterJSON(ctx context.Context, tweetID string) (map[string]any, error) {
+	guestToken, err := twitterGuestToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	for attempt := 0; attempt < 2; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, createTwitterQueryURL(tweetID), nil)
+		if err != nil {
+			return nil, fmt.Errorf("创建 X 请求失败: %w", err)
+		}
+		req.Header.Set("Authorization", twitterGuestAuthorization)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; tdl-msgproce)")
+		req.Header.Set("x-twitter-client-language", "en")
+		req.Header.Set("x-twitter-active-user", "yes")
+		if guestToken != "" {
+			req.Header.Set("x-guest-token", guestToken)
+		}
+		if csrfToken := os.Getenv("X_CSRF_TOKEN"); csrfToken != "" {
+			req.Header.Set("x-csrf-token", csrfToken)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("请求 X GraphQL 失败: %w", err)
+		}
+		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && attempt == 0 && os.Getenv("X_GUEST_TOKEN") == "" {
+			resp.Body.Close()
+			invalidateTwitterGuestToken()
+			guestToken, err = twitterGuestToken(ctx)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("X GraphQL 返回 HTTP %d", resp.StatusCode)
+		}
+		var result map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("解析 X GraphQL 响应失败: %w", err)
+		}
+		if result["errors"] != nil {
+			return nil, fmt.Errorf("X GraphQL 返回错误: %v", result["errors"])
+		}
+		if isTwitterTombstone(result) {
+			return nil, fmt.Errorf("推文不可用或仅对登录用户可见")
+		}
+		return result, nil
+	}
+	return nil, fmt.Errorf("X GraphQL 请求失败")
+}
+
+func isTwitterTombstone(payload map[string]any) bool {
+	data, ok := payload["data"].(map[string]any)
+	if !ok {
+		return false
+	}
+	result, ok := data["tweetResult"].(map[string]any)
+	if !ok {
+		return false
+	}
+	item, ok := result["result"].(map[string]any)
+	if !ok {
+		return false
+	}
+	typename, _ := item["__typename"].(string)
+	return typename == "TweetTombstone"
 }
 
 func parseTwitterMedia(payload map[string]any) ([]TwitterMedia, error) {

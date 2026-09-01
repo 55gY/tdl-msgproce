@@ -81,3 +81,16 @@ func TestUniqueBotLinks(t *testing.T) {
 		t.Fatalf("unexpected unique links: %#v", got)
 	}
 }
+
+func TestIsTwitterTombstone(t *testing.T) {
+	payload := map[string]any{
+		"data": map[string]any{
+			"tweetResult": map[string]any{
+				"result": map[string]any{"__typename": "TweetTombstone"},
+			},
+		},
+	}
+	if !isTwitterTombstone(payload) {
+		t.Fatal("expected tombstone payload")
+	}
+}
