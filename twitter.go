@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gotd/td/telegram"
 	"github.com/iyear/tdl/app/up"
 	"github.com/iyear/tdl/pkg/consts"
 	"github.com/spf13/viper"
@@ -386,6 +387,52 @@ func twitterUploadLimit() int {
 	return limit
 }
 
+func runTwitterUpload(ctx context.Context, client *telegram.Client, opts up.Options, onProgress func(int, string)) error {
+	stdoutCaptureMu.Lock()
+	defer stdoutCaptureMu.Unlock()
+
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	rOut, wOut, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("创建 Twitter 上传 stdout 管道失败: %w", err)
+	}
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		_ = rOut.Close()
+		_ = wOut.Close()
+		return fmt.Errorf("创建 Twitter 上传 stderr 管道失败: %w", err)
+	}
+	os.Stdout, os.Stderr = wOut, wErr
+	defer func() {
+		os.Stdout, os.Stderr = oldStdout, oldStderr
+	}()
+
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(newProgressWriter(oldStdout, onProgress), rOut)
+		closeQuietly(rOut)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(newProgressWriter(oldStderr, onProgress), rErr)
+		closeQuietly(rErr)
+		done <- struct{}{}
+	}()
+
+	err = up.Run(ctx, client, newMemoryStorage(), opts)
+	closeQuietly(wOut)
+	closeQuietly(wErr)
+	<-done
+	<-done
+	return err
+}
+
+func closeQuietly(c io.Closer) {
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
 func (p *MessageProcessor) processTwitterLink(ctx context.Context, link, caption string, onProgress func(int, string)) error {
 	tweetID, err := twitterTweetID(link)
 	if err != nil {
@@ -436,7 +483,7 @@ func (p *MessageProcessor) processTwitterLink(ctx context.Context, link, caption
 			viper.Set(consts.FlagLimit, limit)
 			result := make(chan error, 1)
 			go func() {
-				result <- up.Run(uploadCtx, p.client, newMemoryStorage(), up.Options{To: fmt.Sprintf("%d", p.config.Bot.ForwardTarget), Paths: []string{path}, Caption: caption, Photo: photo})
+				result <- runTwitterUpload(uploadCtx, p.client, up.Options{To: fmt.Sprintf("%d", p.config.Bot.ForwardTarget), Paths: []string{path}, Caption: caption, Photo: photo}, onProgress)
 			}()
 			ticker := time.NewTicker(15 * time.Second)
 			defer ticker.Stop()

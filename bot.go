@@ -1106,7 +1106,7 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 		onProgress := func(percent int, line string) {
 			// fmt.Printf("[DEBUG] 进度回调 (percent=%d, line=%s)\n", percent, line)
 			task.Progress = percent
-			if task.Type == "twitter_download" {
+			if task.Type == "twitter_download" && task.Stage != "上传中" {
 				if strings.Contains(line, "上传") {
 					task.Stage = "上传中"
 				} else {
@@ -1415,7 +1415,7 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		onProgress := func(percent int, line string) {
 			// fmt.Printf("[DEBUG] 进度回调 (percent=%d, line=%s)\n", percent, line)
 			task.Progress = percent
-			if task.Type == "twitter_download" {
+			if task.Type == "twitter_download" && task.Stage != "上传中" {
 				if strings.Contains(line, "上传") {
 					task.Stage = "上传中"
 				} else {
