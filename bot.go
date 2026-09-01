@@ -1103,8 +1103,9 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 				lastPercent = percent
 			}
 
-			// 限制更新频率，根据任务类型使用不同间隔
-			if time.Since(lastUpdate) > updateInterval {
+			// 限制更新频率；关键阶段必须立即刷新，避免 tdl 上传期间长期显示 0%
+			keyStage := percent <= 10 || percent >= 50
+			if keyStage || time.Since(lastUpdate) > updateInterval {
 				lastUpdate = time.Now()
 				// fmt.Printf("[DEBUG] 更新Bot消息 (taskID=%d, percent=%d)\n", task.ID, percent)
 				statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)
@@ -1394,8 +1395,9 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 				lastPercent = percent
 			}
 
-			// 限制更新频率，根据任务类型使用不同间隔
-			if time.Since(lastUpdate) > updateInterval {
+			// 限制更新频率；关键阶段必须立即刷新，避免 tdl 上传期间长期显示 0%
+			keyStage := percent <= 10 || percent >= 50
+			if keyStage || time.Since(lastUpdate) > updateInterval {
 				lastUpdate = time.Now()
 				// fmt.Printf("[DEBUG] 更新Bot消息 (taskID=%d, percent=%d)\n", task.ID, percent)
 				statusText := p.buildBatchStatusText(batch.BatchID, batch.Tasks)

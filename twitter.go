@@ -403,10 +403,12 @@ func (p *MessageProcessor) processTwitterLink(ctx context.Context, link, caption
 		if size > maxTwitterMediaSize {
 			return fmt.Errorf("第 %d 个媒体已跳过：文件大小 %.2f GiB，超过 Telegram 单文件 2GiB 限制", index+1, float64(size)/(1024*1024*1024))
 		}
+		fmt.Printf("📥 Twitter 媒体下载开始 (index=%d/%d, size=%d bytes)\n", index+1, len(media), size)
 		path, err := downloadTwitterMedia(ctx, item, size)
 		if err != nil {
 			return err
 		}
+		fmt.Printf("✅ Twitter 媒体下载完成 (index=%d/%d)\n", index+1, len(media))
 		func() {
 			defer os.Remove(path)
 			if onProgress != nil {
