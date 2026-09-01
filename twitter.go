@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/iyear/tdl/app/up"
+	"github.com/iyear/tdl/pkg/consts"
+	"github.com/spf13/viper"
 )
 
 const maxTwitterMediaSize int64 = 2 * 1024 * 1024 * 1024
@@ -376,6 +378,14 @@ func downloadTwitterMedia(ctx context.Context, media TwitterMedia, expectedSize 
 	return path, nil
 }
 
+func twitterUploadLimit() int {
+	limit := viper.GetInt(consts.FlagLimit)
+	if limit <= 0 {
+		return 1
+	}
+	return limit
+}
+
 func (p *MessageProcessor) processTwitterLink(ctx context.Context, link, caption string, onProgress func(int, string)) error {
 	tweetID, err := twitterTweetID(link)
 	if err != nil {
@@ -418,6 +428,12 @@ func (p *MessageProcessor) processTwitterLink(ctx context.Context, link, caption
 			uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 			defer cancel()
 			fmt.Printf("📤 Twitter tdl 上传开始 (index=%d/%d, target=%d)\n", index+1, len(media), p.config.Bot.ForwardTarget)
+			limit := twitterUploadLimit()
+			if viper.GetInt(consts.FlagLimit) <= 0 {
+				// tdl 的 errgroup.SetLimit(0) 会阻止任何 goroutine 被加入，导致上传永久卡住。
+				fmt.Printf("⚠️ tdl 上传并发限制未配置，已使用安全默认值 1\n")
+			}
+			viper.Set(consts.FlagLimit, limit)
 			result := make(chan error, 1)
 			go func() {
 				result <- up.Run(uploadCtx, p.client, newMemoryStorage(), up.Options{To: fmt.Sprintf("%d", p.config.Bot.ForwardTarget), Paths: []string{path}, Caption: caption, Photo: photo})

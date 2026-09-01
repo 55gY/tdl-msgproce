@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/iyear/tdl/pkg/consts"
+	"github.com/spf13/viper"
 )
 
 func TestExtractTwitterLinks(t *testing.T) {
@@ -102,5 +105,17 @@ func TestTwitterCredentialsEnvironmentOverridesConfig(t *testing.T) {
 	authToken, csrfToken := processor.twitterCredentials()
 	if authToken != "env-auth" || csrfToken != "env-csrf" {
 		t.Fatalf("environment credentials did not override config: auth=%q csrf=%q", authToken, csrfToken)
+	}
+}
+
+func TestTwitterUploadLimitDefaultsToOne(t *testing.T) {
+	viper.Set(consts.FlagLimit, 0)
+	t.Cleanup(func() { viper.Set(consts.FlagLimit, 0) })
+	if got := twitterUploadLimit(); got != 1 {
+		t.Fatalf("expected upload limit 1 for zero config, got %d", got)
+	}
+	viper.Set(consts.FlagLimit, 3)
+	if got := twitterUploadLimit(); got != 3 {
+		t.Fatalf("expected configured upload limit 3, got %d", got)
 	}
 }
