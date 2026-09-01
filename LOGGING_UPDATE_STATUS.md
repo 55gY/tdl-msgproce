@@ -40,7 +40,6 @@
 10. **forward.go** - 需要修改
     - 约20+处 zap 日志调用
 
-11. **checkin.go** - 需要修改
     - 约10+处 zap 日志调用
 
 ## 修改规则
@@ -57,10 +56,8 @@ p.ext.Log().Debug("消息重复，已跳过", zap.Int("message_id", msg.ID))
 ### INFO 级别 → fmt.Printf
 ```go
 // 修改前
-p.ext.Log().Info("签到成功", zap.Int64("bot_id", botID))
 
 // 修改后
-fmt.Printf("✅ 签到成功 (bot_id=%d)\n", botID)
 ```
 
 ### WARN/ERROR 级别 → fmt.Printf

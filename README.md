@@ -13,7 +13,6 @@
 1. **消息监听** - 实时监听 Telegram 频道，智能过滤并提交到订阅 API
 2. **Bot 交互** - Telegram Bot 支持，接收和处理用户命令
 3. **消息转发** - 自动转发频道消息到指定目标（支持 clone/copy 模式）
-4. **定时签到** - 自动向指定机器人发送签到消息（支持 cron 表达式定时）
 
 ### ✨ 核心特性
 
@@ -113,23 +112,7 @@ chmod +x install.sh
 - ✅ copy 模式：简单复制
 - ✅ 统一转发到指定目标聊天
 
-### 4. 定时签到功能 🕐
-
-- ✅ **多机器人支持** - 可配置多个签到任务
-- ✅ **Cron 表达式** - 标准 5 段式定时（分 时 日 月 周）
-- ✅ **灵活调度** - 支持 `*`、`*/n`、`n-m`、逗号分隔等语法
-- ✅ **自动执行** - 无需人工干预，定时自动签到
-- ✅ **防重复执行** - 同一分钟内不会重复触发
-- ✅ **详细日志** - 记录每次签到的执行情况
-- ✅ **独立服务** - 作为第4个独立服务运行，不影响其他功能
-
-**Cron 表达式示例：**
-- `0 1 * * *` - 每天凌晨 1:00
-- `30 8 * * *` - 每天早上 8:30
-- `0 */6 * * *` - 每 6 小时执行一次
-- `0 9 * * 1` - 每周一早上 9:00
-
-### 5. 融合优势 🎯
+### 4. 融合优势 🎯
 
 - ✅ 不需要多个 tdl 进程
 - ✅ 避免 BoltDB session 文件锁冲突
@@ -137,7 +120,7 @@ chmod +x install.sh
 - ✅ 统一的配置文件和日志输出
 - ✅ 自动化安装和管理脚本
 
-### 6. 代码架构优化 🔧
+### 5. 代码架构优化 🔧
 
 #### 最新重构（2026-01）
 
@@ -496,18 +479,7 @@ monitor:
       - ".bmp"
       - "go1.569521.xyz"
 
-# ==================== 定时签到配置 ====================
-checkin:
-  enabled: true
-  tasks:
-    - bot: 7983923821
-      message: '\qd'
-      cron: '0 1 * * *'    # 每天凌晨1:00
-    
-    - bot: 1234567890
-      message: '/checkin'
-      cron: '30 8 * * *'   # 每天早上8:30
-```
+
 
 ### 不同使用场景配置
 
@@ -553,22 +525,6 @@ monitor:
     ss: ["vmess://", "ss://"]
 ```
 
-**场景4：仅定时签到**
-```yaml
-bot:
-  enabled: false
-
-monitor:
-  enabled: false
-
-checkin:
-  enabled: true
-  tasks:
-    - bot: 7983923821
-      message: '\qd'
-      cron: '0 1 * * *'
-```
-
 **场景5：全功能启用**
 ```yaml
 bot:
@@ -579,12 +535,7 @@ monitor:
   enabled: true
   channels: [123456]
 
-checkin:
-  enabled: true
-  tasks:
-    - bot: 7983923821
-      message: '\qd'
-      cron: '0 1 * * *'
+
 ```
 
 ## 🛠️ 管理脚本
@@ -861,3 +812,11 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 如果这个项目对你有帮助，请给一个 Star ⭐
 
 [![Star History Chart](https://api.star-history.com/svg?repos=55gY/tdl-msgproce&type=Date)](https://star-history.com/#55gY/tdl-msgproce&Date)
+
+## Twitter/X 媒体下载
+
+Bot 收到包含 `https://x.com/<用户>/status/<推文ID>` 或 `https://twitter.com/<用户>/status/<推文ID>` 的消息后，会自动解析推文中的图片、视频和 GIF，并通过 tdl 上传到现有的 `bot.forward_target`，无需新增目标频道配置。一次消息可以包含多个 Twitter/X 状态链接，每个状态链接作为一个独立任务执行；任务列表会区分“Telegram 转发”和“Twitter 下载”。
+
+上传 caption 只保留 Bot 消息正文中按现有转发规则提取出的 `#标签`，不会加入作者名或原始 X 链接。每个媒体在下载前必须通过 HTTP `Content-Length` 确认大小；单文件超过 2GiB，或媒体服务器未返回可靠文件大小时，程序会跳过该媒体、向 Bot 说明原因，并且不会创建临时媒体文件。已确认未超限的媒体下载到临时文件并上传，上传结束后自动清理。
+
+X GraphQL 请求默认使用用户脚本参考的公开 Bearer token。若运行环境需要额外的 X 会话信息，可通过环境变量 `X_GUEST_TOKEN` 和 `X_CSRF_TOKEN` 提供请求头值；未能取得有效推文数据时，Bot 会将 X 请求或解析错误显示在任务结果中。

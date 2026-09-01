@@ -1,5 +1,5 @@
 // tdl-msgproce - Telegram 消息处理扩展
-// 
+//
 // 日志输出规范：
 // - 使用 fmt.Printf() 输出用户可见的日志信息
 // - 调试日志使用 // fmt.Printf() 注释格式
@@ -62,9 +62,9 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 		client:          client, // 使用 tdl 为我们创建好的客户端
 		selfUserID:      self.ID,
 		messageCache:    NewMessageCache(20000),
-		channelPts:      make(map[int64]int), // 初始化 pts 状态
+		channelPts:      make(map[int64]int),    // 初始化 pts 状态
 		linkRegex:       buildLinkRegex(config), // 预编译链接提取正则
-		groupedMessages: make(map[int64][]int), // 初始化消息集合追踪
+		groupedMessages: make(map[int64][]int),  // 初始化消息集合追踪
 	}
 
 	// 5. 调用新方法，将所有的消息处理逻辑注册到 dispatcher 中
@@ -96,14 +96,6 @@ func run(ctx context.Context, ext *extension.Extension, dispatcher tg.UpdateDisp
 		proxyServer := NewProxyServer(&config.Proxy)
 		go func() {
 			errChan <- proxyServer.Start(ctx)
-		}()
-	}
-
-	if config.CheckIn.Enabled && len(config.CheckIn.Tasks) > 0 {
-		fmt.Printf("🕐 启动定时签到服务... (任务数: %d)\n", len(config.CheckIn.Tasks))
-		activeServices++
-		go func() {
-			errChan <- processor.StartCheckInScheduler(ctx)
 		}()
 	}
 

@@ -1,5 +1,5 @@
 // tdl-msgproce - Telegram Bot 接口和命令处理
-// 
+//
 // 日志输出规范：
 // - 使用 fmt.Printf() 输出用户可见的日志信息
 // - 调试日志使用 // fmt.Printf() 注释格式
@@ -16,9 +16,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
-	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +27,8 @@ import (
 type ForwardTask struct {
 	ID            int
 	Link          string
+	Type          string // telegram_forward 或 twitter_download
+	Caption       string // Twitter 上传时使用的标签 caption
 	UserID        int64
 	Status        string   // pending, running, completed, cancelled, failed
 	Progress      int      // 0-100 进度百分比
@@ -218,6 +217,7 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 			"👋 欢迎使用 tdl-msgproce Bot！\n\n"+
 				"📌 功能：\n"+
 				"• 发送 Telegram 链接进行转发\n"+
+				"• 发送 Twitter/X 状态链接下载并上传\n"+
 				"• 直接发送 JSON 文件进行批量转发\n"+
 				"• 发送订阅链接添加到监听\n\n"+
 				"🔗 支持格式:\n"+
@@ -236,16 +236,14 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 				"   • 🔥 直接发送 JSON 文件（文件名=目标ID）\n"+
 				"   • 例如：123456789.json 转发到 123456789\n"+
 				"   • 发送 Telegram 链接进行转发\n"+
+				"   • 发送 Twitter/X 状态链接下载并上传\n"+
 				"   • 支持批量转发（一次发送多个链接）\n"+
 				fmt.Sprintf("   • 默认目标: %d\n", p.config.Bot.ForwardTarget)+
 				fmt.Sprintf("   • 转发模式: %s\n\n", p.config.Bot.ForwardMode)+
 				"2️⃣ 添加订阅\n"+
 				"   • 发送订阅链接 (http/https 格式)\n"+
 				"   • 自动添加到监听系统\n\n"+
-				"3️⃣ SS 配置管理\n"+
-				"   • /ss config - 查看 SS 配置\n"+
-				"   • /ss auto - 自动安装/重置 SS\n\n"+
-				"4️⃣ 查看状态\n"+
+				"3️⃣ 查看状态\n"+
 				"   • 使用 /status 查看运行状态\n\n"+
 				"💡 提示：文件名即为转发目标，发送JSON文件后会自动验证和清理无效消息！")
 		return
@@ -262,68 +260,17 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 		return
 	}
 
-	// 处理 /ss 命令
-	if strings.HasPrefix(text, "/ss") {
-		parts := strings.Fields(text)
-		if len(parts) < 2 {
-			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-				"❌ 用法错误\n\n"+
-					"使用方法: /ss [config|auto]\n\n"+
-					"• /ss config - 查看 SS 配置\n"+
-					"• /ss auto - 自动安装/重置 SS")
-			return
-		}
-
-		subCmd := parts[1]
-		// 验证子命令（白名单）
-		if subCmd != "config" && subCmd != "auto" {
-			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-				"❌ 无效的子命令\n\n"+
-					"支持的命令:\n"+
-					"• /ss config - 查看 SS 配置\n"+
-					"• /ss auto - 自动安装/重置 SS")
-			return
-		}
-
-		// 发送执行中的提示
-		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-			fmt.Sprintf("⏳ 正在执行 /ss %s...\n\n下载并执行脚本中，最多等待 5 分钟", subCmd))
-
-		// 异步执行脚本
-		go func() {
-			fmt.Printf("✅ 执行 SS 命令 (userID=%d, command=%s)\n", msg.From.ID, subCmd)
-
-			output, err := p.executeSSCommand(ctx, subCmd)
-			if err != nil {
-				fmt.Printf("❌ SS 命令执行失败 (command=%s): %v\n", subCmd, err)
-				p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-					fmt.Sprintf("❌ 执行失败:\n\n%s", err.Error()))
-				return
-			}
-
-			// 截断输出到 4000 字符（Telegram 限制）
-			if len(output) > 4000 {
-				output = output[:3900] + "\n\n... (输出过长已截断)"
-			}
-
-			fmt.Printf("✅ SS 命令执行成功 (command=%s)\n", subCmd)
-
-			p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
-				fmt.Sprintf("✅ 执行完成:\n\n%s", output))
-		}()
-		return
-	}
-
-	// 提取链接或频道用户名
-	links := extractTelegramLinks(text)
+	// 提取 Telegram 和 Twitter/X 链接。两类任务共用现有批处理、取消和状态反馈机制。
+	tgLinks := extractTelegramLinks(text)
+	twitterLinks := extractTwitterLinks(text)
+	links := append(append([]string{}, tgLinks...), twitterLinks...)
 	if len(links) == 0 {
 		// 检查是否是订阅链接或节点链接
 		allLinks := p.ExtractAllLinks(text)
 		if len(allLinks) > 0 {
-			// 过滤非 t.me 链接
 			nonTgLinks := make([]string, 0)
 			for _, link := range allLinks {
-				if !strings.Contains(link, "t.me") {
+				if !strings.Contains(link, "t.me") && len(extractTwitterLinks(link)) == 0 {
 					nonTgLinks = append(nonTgLinks, link)
 				}
 			}
@@ -337,6 +284,7 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 			"❌ 未找到有效链接\n\n"+
 				"请发送以下格式:\n"+
 				"• Telegram 链接: https://t.me/channel/123\n"+
+				"• Twitter/X 链接: https://x.com/user/status/123\n"+
 				"• 频道用户名: @channel_username\n"+
 				"• 订阅链接: http/https 格式\n\n"+
 				"💡 批量转发请直接发送 JSON 文件")
@@ -346,12 +294,20 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 	// 创建批量任务
 	batchID := taskManager.GetNextBatchID(msg.From.ID)
 	tasks := make([]*ForwardTask, 0, len(links))
-
+	caption := extractHashtagCaption(text)
 	for _, link := range links {
 		taskID := taskManager.GetNextTaskID(msg.From.ID)
+		taskType := "telegram_forward"
+		taskCaption := ""
+		if len(extractTwitterLinks(link)) > 0 {
+			taskType = "twitter_download"
+			taskCaption = caption
+		}
 		task := &ForwardTask{
 			ID:        taskID,
 			Link:      link,
+			Type:      taskType,
+			Caption:   taskCaption,
 			UserID:    msg.From.ID,
 			Status:    "pending",
 			Cancelled: false,
@@ -775,7 +731,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 			// 检测模式响应 - 判断是否有节点被添加
 			var msg string
 			var success bool
-			
+
 			// 判断是否有节点被成功添加
 			if response.AddedNodes != nil && *response.AddedNodes > 0 {
 				// 成功情况：有节点被添加
@@ -797,7 +753,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 					msg = "❌ 订阅检测失败，未添加任何节点\n"
 				}
 			}
-			
+
 			// 添加统计信息（成功和失败都显示）
 			msg += fmt.Sprintf("📊 检测: %d个节点\n", *response.TestedNodes)
 			if response.PassedNodes != nil {
@@ -815,14 +771,14 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 			if response.Timeout != nil && *response.Timeout && response.Warning != "" {
 				msg += "\n⚠️ " + response.Warning
 			}
-			
+
 			// 记录日志
 			if success {
 				fmt.Printf("✅ %s检测并添加成功 (link=%s, tested=%d, duration=%s)\n", linkType, link, *response.TestedNodes, response.Duration)
 			} else {
 				fmt.Printf("⚠️  %s检测失败，未添加节点 (link=%s, tested=%d, duration=%s)\n", linkType, link, *response.TestedNodes, response.Duration)
 			}
-			
+
 			return success, msg
 		} else {
 			// 普通模式响应
@@ -847,7 +803,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 		} else {
 			msg = "❌ 订阅检测失败，未添加任何节点\n"
 		}
-		
+
 		// 添加统计信息
 		msg += fmt.Sprintf("📊 检测: %d个节点\n", *response.TestedNodes)
 		if response.PassedNodes != nil {
@@ -865,9 +821,9 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 		if response.Timeout != nil && *response.Timeout && response.Warning != "" {
 			msg += "\n⚠️ " + response.Warning
 		}
-		
+
 		fmt.Printf("⚠️  %s检测失败，未添加节点 (link=%s, tested=%d, duration=%s)\n", linkType, link, *response.TestedNodes, response.Duration)
-		
+
 		return false, msg
 	}
 
@@ -957,10 +913,17 @@ func (p *MessageProcessor) buildBatchStatusText(batchID int, tasks []*ForwardTas
 		var taskType string
 
 		// 判断任务类型
-		if strings.HasSuffix(task.Link, ".json") {
-			taskType = "📁"
-		} else {
-			taskType = "🔗"
+		switch task.Type {
+		case "twitter_download":
+			taskType = "𝕏 Twitter下载"
+		case "telegram_forward":
+			taskType = "🔗 Telegram转发"
+		default:
+			if strings.HasSuffix(task.Link, ".json") {
+				taskType = "📁"
+			} else {
+				taskType = "🔗"
+			}
 		}
 
 		switch task.Status {
@@ -969,7 +932,7 @@ func (p *MessageProcessor) buildBatchStatusText(batchID int, tasks []*ForwardTas
 			statusText = "待处理"
 		case "running":
 			statusIcon = "🔄"
-			statusText = fmt.Sprintf("转发中 %d%%", task.Progress)
+			statusText = fmt.Sprintf("%s中 %d%%", taskTypeLabel(task.Type), task.Progress)
 		case "completed":
 			statusIcon = "✅"
 			statusText = "已完成"
@@ -1046,7 +1009,7 @@ func (p *MessageProcessor) buildGroupedBatchStatusText(batchID int, allTasks []*
 			statusText = "待处理"
 		case "running":
 			statusIcon = "🔄"
-			statusText = fmt.Sprintf("转发中 %d%%", task.Progress)
+			statusText = fmt.Sprintf("%s中 %d%%", taskTypeLabel(task.Type), task.Progress)
 		case "completed":
 			statusIcon = "✅"
 			statusText = "已完成"
@@ -1071,7 +1034,6 @@ func (p *MessageProcessor) buildGroupedBatchStatusText(batchID int, allTasks []*
 
 	// 显示统计信息
 	sb.WriteString(fmt.Sprintf("\n✅成功:%d | ❌失败:%d\n", completed, failed))
-	
 
 	return sb.String()
 }
@@ -1148,11 +1110,11 @@ func (p *MessageProcessor) executeBatchTasksWithTarget(ctx context.Context, bot 
 		} else if err != nil {
 			task.Status = "failed"
 			task.Error = err.Error()
-			fmt.Printf("❌ 转发失败 (taskID=%d, link=%s): %v\n", task.ID, task.Link, err)
+			fmt.Printf("❌ %s失败 (taskID=%d, link=%s): %v\n", taskTypeLabel(task.Type), task.ID, task.Link, err)
 		} else {
 			task.Status = "completed"
 			p.forwardCount++
-			fmt.Printf("✅ 转发成功 (taskID=%d, link=%s)\n", task.ID, task.Link)
+			fmt.Printf("✅ %s成功 (taskID=%d, link=%s)\n", taskTypeLabel(task.Type), task.ID, task.Link)
 		}
 
 		// 更新状态显示
@@ -1234,13 +1196,13 @@ func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Contex
 		if endIdx > totalTasks {
 			endIdx = totalTasks
 		}
-		
+
 		currentGroupTasks := batch.Tasks[startIdx:endIdx]
-		
+
 		// 更新显示当前组
 		statusText := p.buildGroupedBatchStatusText(batch.BatchID, batch.Tasks, startIdx, endIdx)
 		p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
-		
+
 		// 执行当前组的任务
 		for _, task := range currentGroupTasks {
 			// 检查是否已取消
@@ -1277,7 +1239,7 @@ func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Contex
 			// 设置任务状态为运行中
 			task.Status = "running"
 			task.Progress = 0
-			
+
 			// 更新显示（任务开始）
 			statusText := p.buildGroupedBatchStatusText(batch.BatchID, batch.Tasks, startIdx, endIdx)
 			p.updateBotMessageWithKeyboard(bot, batch.StatusMsg.Chat.ID, batch.StatusMsg.MessageID, statusText, keyboard)
@@ -1287,8 +1249,13 @@ func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Contex
 				task.Progress = percent
 			}
 
-			// 执行转发（传入目标参数）
-			err := p.forwardFromLink(ctx, task.Link, &customTarget, onProgress, true, nil)
+			// 根据任务类型执行 Telegram 转发或 Twitter 下载上传。
+			var err error
+			if task.Type == "twitter_download" {
+				err = p.processTwitterLink(ctx, task.Link, task.Caption, onProgress)
+			} else {
+				err = p.forwardFromLink(ctx, task.Link, &customTarget, onProgress, true, nil)
+			}
 
 			// 检查context是否被取消
 			if ctx.Err() == context.Canceled {
@@ -1297,12 +1264,12 @@ func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Contex
 			} else if err != nil {
 				task.Status = "failed"
 				task.Error = err.Error()
-				fmt.Printf("❌ 转发失败 (taskID=%d, link=%s): %v\n", task.ID, task.Link, err)
+				fmt.Printf("❌ %s失败 (taskID=%d, link=%s): %v\n", taskTypeLabel(task.Type), task.ID, task.Link, err)
 			} else {
 				task.Status = "completed"
 				task.Progress = 100
 				p.forwardCount++
-				fmt.Printf("✅ 转发成功 (taskID=%d, link=%s)\n", task.ID, task.Link)
+				fmt.Printf("✅ %s成功 (taskID=%d, link=%s)\n", taskTypeLabel(task.Type), task.ID, task.Link)
 			}
 
 			// 更新显示（任务完成）
@@ -1324,7 +1291,7 @@ func (p *MessageProcessor) executeGroupedBatchTasksWithTarget(ctx context.Contex
 			// 任务间隔（避免频繁操作）
 			time.Sleep(500 * time.Millisecond)
 		}
-		
+
 		// 当前组完成，如果不是最后一组，稍作等待再进入下一组
 		if groupIndex < totalGroups-1 {
 			time.Sleep(1 * time.Second)
@@ -1424,8 +1391,13 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 			}
 		}
 
-		// 执行转发（传入进度回调）
-		err := p.forwardFromLink(ctx, task.Link, nil, onProgress, true, nil)
+		// 根据任务类型执行 Telegram 转发或 Twitter 下载上传。
+		var err error
+		if task.Type == "twitter_download" {
+			err = p.processTwitterLink(ctx, task.Link, task.Caption, onProgress)
+		} else {
+			err = p.forwardFromLink(ctx, task.Link, nil, onProgress, true, nil)
+		}
 
 		// 检查context是否被取消
 		if ctx.Err() == context.Canceled {
@@ -1434,11 +1406,11 @@ func (p *MessageProcessor) executeBatchTasks(ctx context.Context, bot *tgbotapi.
 		} else if err != nil {
 			task.Status = "failed"
 			task.Error = err.Error()
-			fmt.Printf("❌ 转发失败 (taskID=%d, link=%s): %v\n", task.ID, task.Link, err)
+			fmt.Printf("❌ %s失败 (taskID=%d, link=%s): %v\n", taskTypeLabel(task.Type), task.ID, task.Link, err)
 		} else {
 			task.Status = "completed"
 			p.forwardCount++
-			fmt.Printf("✅ 转发成功 (taskID=%d, link=%s)\n", task.ID, task.Link)
+			fmt.Printf("✅ %s成功 (taskID=%d, link=%s)\n", taskTypeLabel(task.Type), task.ID, task.Link)
 		}
 
 		// 更新状态显示
@@ -1529,138 +1501,10 @@ func (p *MessageProcessor) handleCallbackQuery(ctx context.Context, bot *tgbotap
 	}
 }
 
-// downloadSSScript 从 GitHub 下载脚本到临时文件
-func (p *MessageProcessor) downloadSSScript() (string, error) {
-	const scriptURL = "https://raw.githubusercontent.com/55gY/cmd/main/cmd.sh"
-
-	// 验证 HTTPS
-	if !strings.HasPrefix(scriptURL, "https://") {
-		return "", fmt.Errorf("安全错误：仅允许 HTTPS URL")
-	}
-
-	// 创建 HTTP 客户端（参考现有代码模式）
-	client := &http.Client{
-		Timeout: 120 * time.Second,
-	}
-
-	// 创建请求
-	req, err := http.NewRequest("GET", scriptURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	// fmt.Printf("[DEBUG] 下载 SS 脚本 (url=%s)\n", scriptURL)
-
-	// 发送请求
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("下载失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// 检查状态码
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("下载失败，HTTP %d", resp.StatusCode)
-	}
-
-	// 创建临时文件
-	tmpFile, err := os.CreateTemp("", "cmd-*.sh")
-	if err != nil {
-		return "", fmt.Errorf("创建临时文件失败: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	// 写入脚本内容
-	_, err = io.Copy(tmpFile, resp.Body)
-	tmpFile.Close()
-	if err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("写入脚本失败: %w", err)
-	}
-
-	// 设置可执行权限（仅 Unix 系统）
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(tmpPath, 0700); err != nil {
-			os.Remove(tmpPath)
-			return "", fmt.Errorf("设置执行权限失败: %w", err)
-		}
-	}
-
-	// fmt.Printf("[DEBUG] 脚本下载成功 (tmpPath=%s)\n", tmpPath)
-	return tmpPath, nil
-}
-
-// executeSSCommand 执行 SS 命令（下载脚本并执行）
-func (p *MessageProcessor) executeSSCommand(ctx context.Context, subCmd string) (string, error) {
-	// 下载脚本
-	tmpPath, err := p.downloadSSScript()
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(tmpPath) // 确保清理临时文件
-
-	// 创建 5 分钟超时的 context
-	execCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	// 检测系统并找到 bash
-	var bashPath string
-	if runtime.GOOS == "windows" {
-		// Windows: 查找 bash（Git Bash 或 WSL）
-		if path, err := exec.LookPath("bash"); err == nil {
-			bashPath = path
-		} else {
-			return "", fmt.Errorf("Windows 系统需要 Git Bash 或 WSL\n请安装 Git for Windows: https://git-scm.com/")
-		}
-	} else {
-		// Linux/macOS
-		bashPath = "/bin/bash"
-	}
-
-	// fmt.Printf("[DEBUG] 执行脚本 (bash=%s, script=%s, subCmd=%s)\n", bashPath, tmpPath, subCmd)
-
-	// 执行脚本：bash tmpPath ss subCmd
-	cmd := exec.CommandContext(execCtx, bashPath, tmpPath, "ss", subCmd)
-
-	// 捕获标准输出和错误输出
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// 执行命令
-	err = cmd.Run()
-
-	// 合并输出
-	output := stdout.String()
-	if stderr.Len() > 0 {
-		output += "\n" + stderr.String()
-	}
-
-	// 移除 ANSI 颜色代码（如 [0;34m, [0;32m, [0m, [1;33m 等）
-	// 匹配 ESC[ 序列和简化的 [ 序列
-	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*m|\[0;[0-9]+m|\[1;[0-9]+m|\[0m`)
-	output = ansiRegex.ReplaceAllString(output, "")
-
-	// 检查错误
-	if err != nil {
-		// 检查是否超时
-		if execCtx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("脚本执行超过 5 分钟已终止")
-		}
-		// 返回错误和输出
-		if output != "" {
-			return "", fmt.Errorf("脚本执行失败: %w\n\n输出:\n%s", err, output)
-		}
-		return "", fmt.Errorf("脚本执行失败: %w", err)
-	}
-
-	return output, nil
-}
-
 // handleDocumentMessage 处理文档文件消息
 func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbotapi.BotAPI, taskManager *TaskManager, msg *tgbotapi.Message) {
 	doc := msg.Document
-	
+
 	// 检查文件类型
 	if !strings.HasSuffix(doc.FileName, ".json") {
 		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
@@ -1669,7 +1513,7 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 				"例如：123456789.json")
 		return
 	}
-	
+
 	// 从文件名提取转发目标 ID
 	fileNameWithoutExt := strings.TrimSuffix(doc.FileName, ".json")
 	var forwardTarget int64
@@ -1681,7 +1525,7 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 				"当前文件名："+doc.FileName)
 		return
 	}
-	
+
 	// 检查文件大小（限制 100MB）
 	if doc.FileSize > 100*1024*1024 {
 		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
@@ -1690,16 +1534,20 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 				"最大限制: 100 MB")
 		return
 	}
-	
+
 	fmt.Printf("📄 收到文档文件 (fileName=%s, fileSize=%d, userID=%d, forwardTarget=%d)\n", doc.FileName, doc.FileSize, msg.From.ID, forwardTarget)
-	
+
 	// 发送下载中提示
 	statusMsg := p.sendBotMessage(bot, msg.Chat.ID,
 		fmt.Sprintf("📥 正在下载文件: %s\n文件大小: %.2f MB\n转发目标: %d\n\n请稍候...",
 			doc.FileName,
 			float64(doc.FileSize)/(1024*1024),
 			forwardTarget))
-	
+	if statusMsg == nil {
+		fmt.Printf("❌ 无法发送文件处理状态消息 (fileName=%s)\n", doc.FileName)
+		return
+	}
+
 	// 获取文件下载链接
 	fileConfig := tgbotapi.FileConfig{FileID: doc.FileID}
 	file, err := bot.GetFile(fileConfig)
@@ -1709,54 +1557,69 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 			"❌ 获取文件失败: "+err.Error())
 		return
 	}
-	
-	// 使用当前目录，文件名保持不变
-	tmpFilePath := doc.FileName
-	
-	// 下载文件
+
+	// 仅使用随机临时文件，避免用户文件名造成路径穿越或覆盖现有文件。
 	fileURL := file.Link(bot.Token)
-	resp, err := http.Get(fileURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 创建下载请求失败: "+err.Error())
+		return
+	}
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("❌ 下载文件失败: %v\n", err)
-		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-			"❌ 下载文件失败: "+err.Error())
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 下载文件失败: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
-	
-	// 保存文件
-	outFile, err := os.Create(tmpFilePath)
-	if err != nil {
-		fmt.Printf("❌ 创建文件失败: %v\n", err)
-		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-			"❌ 创建文件失败: "+err.Error())
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("Telegram 文件下载返回 HTTP %d", resp.StatusCode)
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 下载文件失败: "+err.Error())
 		return
 	}
-	
-	written, err := io.Copy(outFile, resp.Body)
-	outFile.Close()
+	const maxJSONFileSize int64 = 100 * 1024 * 1024
+	if resp.ContentLength > maxJSONFileSize {
+		err := fmt.Errorf("文件超过 100 MB 限制")
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 下载文件失败: "+err.Error())
+		return
+	}
+	tmpFile, err := os.CreateTemp("", "tdl-msgproce-json-*.json")
 	if err != nil {
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 创建临时文件失败: "+err.Error())
+		return
+	}
+	tmpFilePath := tmpFile.Name()
+	written, err := io.Copy(tmpFile, io.LimitReader(resp.Body, maxJSONFileSize+1))
+	closeErr := tmpFile.Close()
+	if err != nil || closeErr != nil {
+		if err == nil {
+			err = closeErr
+		}
 		fmt.Printf("❌ 保存文件失败: %v\n", err)
-		os.Remove(tmpFilePath)
-		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
-			"❌ 保存文件失败: "+err.Error())
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 保存文件失败: "+err.Error())
 		return
 	}
-	
+	if written > maxJSONFileSize {
+		err := fmt.Errorf("实际文件超过 100 MB 限制")
+		p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID, "❌ 下载文件失败: "+err.Error())
+		return
+	}
+
 	fmt.Printf("✅ 文件下载成功 (filePath=%s, size=%d)\n", tmpFilePath, written)
-	
+
 	// 更新状态 - 文件下载完成
 	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
 		fmt.Sprintf("✅ 文件下载成功\n\n文件: %s\n大小: %.2f MB\n转发目标: %d\n\n🚀 准备开始转发...",
 			doc.FileName,
 			float64(written)/(1024*1024),
 			forwardTarget))
-	
+
 	time.Sleep(2 * time.Second)
-	
+
 	// 直接使用原始文件
 	finalFilePath := tmpFilePath
-	
+
 	// 解析 JSON 文件获取消息链接
 	links, err := p.parseJSONMessages(finalFilePath)
 	if err != nil {
@@ -1766,25 +1629,26 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 		os.Remove(tmpFilePath)
 		return
 	}
-	
+
 	fmt.Printf("✅ JSON 解析完成 (file=%s, totalMessages=%d)\n", finalFilePath, len(links))
-	
+
 	// 创建转发任务（每5条消息为一组）
 	batchID := taskManager.GetNextBatchID(msg.From.ID)
 	var allTasks []*ForwardTask
-	
+
 	for _, link := range links {
 		taskID := taskManager.GetNextTaskID(msg.From.ID)
 		task := &ForwardTask{
 			ID:        taskID,
 			Link:      link,
+			Type:      "telegram_forward",
 			UserID:    msg.From.ID,
 			Status:    "pending",
 			Cancelled: false,
 		}
 		allTasks = append(allTasks, task)
 	}
-	
+
 	// 更新状态消息为任务概览
 	p.updateBotMessage(bot, statusMsg.Chat.ID, statusMsg.MessageID,
 		fmt.Sprintf("⚠️ 批量转发任务\n\n"+
@@ -1802,21 +1666,21 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 			"即将开始执行...",
 			len(links), forwardTarget, (len(links)+4)/5))
 	time.Sleep(3 * time.Second)
-	
+
 	// 创建取消按钮
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🛑 终止所有任务", fmt.Sprintf("cancel_batch_%d_%d", msg.From.ID, batchID)),
 		),
 	)
-	
+
 	// 初始显示第一组任务（最多5个）
 	firstGroupSize := 5
 	if len(allTasks) < firstGroupSize {
 		firstGroupSize = len(allTasks)
 	}
 	firstGroupTasks := allTasks[:firstGroupSize]
-	
+
 	// 发送汇总状态消息
 	statusText := p.buildBatchStatusText(batchID, firstGroupTasks)
 	batchStatusMsg := p.sendBotMessageWithKeyboard(bot, msg.Chat.ID, statusText, keyboard)
@@ -1824,10 +1688,10 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 		os.Remove(tmpFilePath) // 清理文件
 		return
 	}
-	
+
 	// 创建可取消的 context
 	batchCtx, cancel := context.WithCancel(ctx)
-	
+
 	// 创建批量任务（包含所有任务用于统计）
 	batch := &BatchTask{
 		BatchID:   batchID,
@@ -1837,16 +1701,16 @@ func (p *MessageProcessor) handleDocumentMessage(ctx context.Context, bot *tgbot
 		Cancel:    cancel,
 		StartTime: time.Now(),
 	}
-	
+
 	// 添加到任务管理器
 	taskManager.AddBatch(batch)
-	
+
 	// 异步执行分组批量转发
 	go func() {
 		p.executeGroupedBatchTasksWithTarget(batchCtx, bot, taskManager, batch, forwardTarget, 5)
 		// 任务完成后清理文件
 		time.Sleep(2 * time.Second) // 等待最后的状态更新
-		
+
 		// 删除文件
 		if err := os.Remove(finalFilePath); err != nil {
 			fmt.Printf("⚠️  删除文件失败 (filePath=%s): %v\n", finalFilePath, err)
