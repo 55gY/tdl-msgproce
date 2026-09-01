@@ -116,10 +116,27 @@ func invalidateTwitterGuestToken() {
 	twitterGuestTokenCache.Unlock()
 }
 
+func (p *MessageProcessor) twitterCredentials() (authToken, csrfToken string) {
+	authToken = os.Getenv("X_AUTH_TOKEN")
+	if authToken == "" {
+		authToken = p.config.Twitter.AuthToken
+	}
+	csrfToken = os.Getenv("X_CSRF_TOKEN")
+	if csrfToken == "" {
+		csrfToken = p.config.Twitter.CSRFToken
+	}
+	return authToken, csrfToken
+}
+
 func (p *MessageProcessor) fetchTwitterJSON(ctx context.Context, tweetID string) (map[string]any, error) {
-	guestToken, err := twitterGuestToken(ctx)
-	if err != nil {
-		return nil, err
+	authToken, csrfToken := p.twitterCredentials()
+	guestToken := ""
+	var err error
+	if authToken == "" {
+		guestToken, err = twitterGuestToken(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -133,17 +150,20 @@ func (p *MessageProcessor) fetchTwitterJSON(ctx context.Context, tweetID string)
 		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; tdl-msgproce)")
 		req.Header.Set("x-twitter-client-language", "en")
 		req.Header.Set("x-twitter-active-user", "yes")
-		if guestToken != "" {
+		if authToken != "" {
+			req.Header.Set("Cookie", fmt.Sprintf("auth_token=%s; ct0=%s", authToken, csrfToken))
+			req.Header.Set("x-twitter-auth-type", "OAuth2Session")
+		} else if guestToken != "" {
 			req.Header.Set("x-guest-token", guestToken)
 		}
-		if csrfToken := os.Getenv("X_CSRF_TOKEN"); csrfToken != "" {
+		if csrfToken != "" {
 			req.Header.Set("x-csrf-token", csrfToken)
 		}
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("请求 X GraphQL 失败: %w", err)
 		}
-		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && attempt == 0 && os.Getenv("X_GUEST_TOKEN") == "" {
+		if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && attempt == 0 && authToken == "" && os.Getenv("X_GUEST_TOKEN") == "" {
 			resp.Body.Close()
 			invalidateTwitterGuestToken()
 			guestToken, err = twitterGuestToken(ctx)
@@ -154,6 +174,9 @@ func (p *MessageProcessor) fetchTwitterJSON(ctx context.Context, tweetID string)
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
+			if authToken != "" && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+				return nil, fmt.Errorf("X 登录 Cookie 无效或已过期 (HTTP %d)", resp.StatusCode)
+			}
 			return nil, fmt.Errorf("X GraphQL 返回 HTTP %d", resp.StatusCode)
 		}
 		var result map[string]any

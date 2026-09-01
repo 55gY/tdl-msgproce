@@ -18,6 +18,7 @@ type Config struct {
 	Bot     BotConfig     `yaml:"bot"`
 	Monitor MonitorConfig `yaml:"monitor"`
 	Proxy   ProxyConfig   `yaml:"proxy"`
+	Twitter TwitterConfig `yaml:"twitter"`
 }
 
 // BotConfig Telegram Bot 配置
@@ -27,6 +28,13 @@ type BotConfig struct {
 	AllowedUsers  []int64 `yaml:"allowed_users"`
 	ForwardTarget int64   `yaml:"forward_target"`
 	ForwardMode   string  `yaml:"forward_mode"` // clone 或 copy
+}
+
+// TwitterConfig X/Twitter 登录会话配置。
+// 敏感值优先从 X_AUTH_TOKEN/X_CSRF_TOKEN 环境变量读取。
+type TwitterConfig struct {
+	AuthToken string `yaml:"auth_token"`
+	CSRFToken string `yaml:"csrf_token"`
 }
 
 // MonitorConfig 消息监听配置

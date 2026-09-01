@@ -832,3 +832,14 @@ X GraphQL 请求默认使用用户脚本参考的公开 Bearer token。若运行
 ```
 
 启用后，普通提交例如 `git commit -m "fix: 修复消息处理"` 会自动变为带有 `v1.0.xx` 的提交消息。Release workflow 会从主分支提交消息中提取该版本号，创建同名标签并执行打包发布。
+
+## Twitter/X 登录 Cookie 配置
+
+Twitter/X 下载默认使用匿名 guest token。若推文仅对登录用户可见，可以为运行账号提供浏览器会话中的 `auth_token` 和 `ct0`。推荐使用环境变量：
+
+```bash
+export X_AUTH_TOKEN='你的 auth_token'
+export X_CSRF_TOKEN='你的 ct0'
+```
+
+也可以在 `config.yaml` 的 `twitter` 区块中填写 `auth_token` 和 `csrf_token`，但不要把真实值提交到 Git。环境变量优先于配置文件；程序不会在日志中输出这些敏感值。Cookie 失效时会提示登录 Cookie 无效或已过期，需要重新获取。

@@ -94,3 +94,13 @@ func TestIsTwitterTombstone(t *testing.T) {
 		t.Fatal("expected tombstone payload")
 	}
 }
+
+func TestTwitterCredentialsEnvironmentOverridesConfig(t *testing.T) {
+	t.Setenv("X_AUTH_TOKEN", "env-auth")
+	t.Setenv("X_CSRF_TOKEN", "env-csrf")
+	processor := &MessageProcessor{config: &Config{Twitter: TwitterConfig{AuthToken: "file-auth", CSRFToken: "file-csrf"}}}
+	authToken, csrfToken := processor.twitterCredentials()
+	if authToken != "env-auth" || csrfToken != "env-csrf" {
+		t.Fatalf("environment credentials did not override config: auth=%q csrf=%q", authToken, csrfToken)
+	}
+}
