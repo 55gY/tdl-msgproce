@@ -280,13 +280,18 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 	}
 
 	if len(links) == 0 {
+		// 节点/订阅链接已经交给现有 monitor 链路处理，不能再落入转发链接的无效提示。
+		if len(nonTgTwitterLinks) > 0 {
+			return
+		}
 		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
 			"❌ 未找到有效链接\n\n"+
 				"请发送以下格式:\n"+
 				"• Telegram 转发链接: https://t.me/channel/123\n"+
 				"• Twitter 下载链接: https://x.com/user/status/123\n"+
 				"• 频道用户名: @channel_username\n"+
-				"• 订阅链接: http/https 格式\n\n"+
+				"• 订阅链接: http/https 格式\n"+
+				"• 节点链接: 使用 config.yaml 中 monitor.filters.ss 配置的协议\n\n"+
 				"💡 批量转发请直接发送 JSON 文件")
 		return
 	}
@@ -454,7 +459,10 @@ func (p *MessageProcessor) addNodesBatchToAPI(nodes []string) (bool, *Subscripti
 		return false, &response
 	}
 
-	// 其他错误
+	// 其他错误：保留 HTTP 错误上下文，交由 Bot 展示。
+	if response.Error == "" {
+		response.Error = fmt.Sprintf("节点 API 返回 HTTP %d", resp.StatusCode)
+	}
 	fmt.Printf("❌ 批量节点提交失败: %s\n", response.Error)
 	return false, &response
 }
@@ -552,6 +560,19 @@ func (p *MessageProcessor) handleSubscriptionLinks(ctx context.Context, bot *tgb
 			fmt.Printf("✅ 批量节点添加成功: %d个\n", len(nodes))
 		} else {
 			fmt.Printf("❌ 批量节点添加失败: %d个\n", len(nodes))
+			if resp != nil {
+				errMsg := resp.Error
+				if errMsg == "" {
+					errMsg = resp.Message
+				}
+				if errMsg != "" {
+					errorMessages = append(errorMessages, fmt.Sprintf("❌ 节点处理失败: %s", errMsg))
+				} else if resp.TestedNodes == nil {
+					errorMessages = append(errorMessages, "❌ 节点处理失败：节点 API 未返回检测结果")
+				}
+			} else {
+				errorMessages = append(errorMessages, "❌ 节点处理失败：无法连接节点 API 或 API 返回了无效响应")
+			}
 		}
 
 		if resp != nil && resp.TestedNodes != nil {
