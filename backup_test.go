@@ -17,6 +17,7 @@ func buildFakeTdlRoot(t *testing.T) string {
 	root := filepath.Join(t.TempDir(), ".tdl")
 	files := map[string]string{
 		"config.toml":                             "tdl config",
+		"data.kv":                                 "kv file",
 		"session/default/session.json":            "session data",
 		"data/kv.db":                              "kv data",
 		"extensions/data/msgproce/config.yaml":    "bot config",
@@ -51,6 +52,7 @@ func TestCollectBackupEntries(t *testing.T) {
 
 	want := []string{
 		".tdl/config.toml",
+		".tdl/data.kv",
 		".tdl/data/kv.db",
 		".tdl/extensions/data/msgproce/config.yaml",
 		".tdl/session/default/session.json",
@@ -105,8 +107,11 @@ func TestCreateBackupArchive(t *testing.T) {
 		contents[hdr.Name] = string(data)
 	}
 
-	if len(contents) != 4 {
+	if len(contents) != 5 {
 		t.Fatalf("压缩包文件数不对: %d, names=%v", len(contents), keys(contents))
+	}
+	if contents[".tdl/data.kv"] != "kv file" {
+		t.Fatalf("data.kv 内容不对")
 	}
 	if contents[".tdl/session/default/session.json"] != "session data" {
 		t.Fatalf("登录会话文件内容不对")

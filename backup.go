@@ -27,8 +27,9 @@ import (
 // 备份纳入清单（相对于 tdl 根目录，如 ~/.tdl）
 var backupIncludeSpecs = []string{
 	"config.toml",              // tdl 主配置
+	"data.kv",                  // tdl 主 kv 数据库文件
 	"session",                  // tdl 登录会话（含登录配置文件）
-	"data",                     // tdl 内部数据
+	"data",                     // tdl 内部数据目录
 	"extensions/data/msgproce", // tdl-msgproce 扩展数据目录（含 config.yaml）
 }
 
