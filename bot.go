@@ -246,6 +246,9 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 				"   • 自动添加到监听系统\n\n"+
 				"3️⃣ 查看状态\n"+
 				"   • 使用 /status 查看运行状态\n\n"+
+				"4️⃣ 备份配置\n"+
+				"   • 使用 /backup 打包 tdl 配置文件（含登录会话）\n"+
+				"   • 按目录结构压缩为 tar.gz 并发送给你\n\n"+
 				"💡 提示：文件名即为转发目标，发送JSON文件后会自动验证和清理无效消息！")
 		return
 	}
@@ -258,6 +261,11 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 			"🎯 转发目标: %d",
 			p.messageCount, p.forwardCount, p.config.Bot.ForwardTarget)
 		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID, status)
+		return
+	}
+
+	if strings.HasPrefix(text, "/backup") {
+		p.handleBackupCommand(ctx, bot, msg)
 		return
 	}
 
