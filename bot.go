@@ -152,6 +152,9 @@ func (p *MessageProcessor) StartTelegramBot(ctx context.Context) error {
 	bot.Debug = false
 	fmt.Printf("✅ Bot 已授权: @%s\n", bot.Self.UserName)
 
+	// 注册 Bot 命令菜单（客户端输入 / 时展示）
+	p.registerBotCommands(bot)
+
 	// 创建任务管理器
 	taskManager := NewTaskManager()
 
@@ -212,9 +215,12 @@ func (p *MessageProcessor) isUserAllowed(userID int64) bool {
 func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.BotAPI, taskManager *TaskManager, msg *tgbotapi.Message) {
 	text := msg.Text
 
+	// 常驻键盘按钮：文本映射为对应命令，复用下方命令分支
+	text = resolveMenuButton(text)
+
 	// 处理命令
 	if strings.HasPrefix(text, "/start") {
-		p.sendBotReply(bot, msg.Chat.ID, msg.MessageID,
+		p.sendBotReplyWithKeyboard(bot, msg.Chat.ID, msg.MessageID,
 			"👋 欢迎使用 tdl-msgproce Bot！\n\n"+
 				"📌 功能：\n"+
 				"• 发送 Telegram 链接进行转发\n"+
@@ -226,7 +232,8 @@ func (p *MessageProcessor) handleBotMessage(ctx context.Context, bot *tgbotapi.B
 				"• @channel_username\n"+
 				"• 📄 目标ID.json\n"+
 				"• 订阅链接 (http/https)\n"+
-				"• 多个链接（空格或换行分隔）")
+				"• 多个链接（空格或换行分隔）\n\n"+
+				"💡 下方按钮可一键执行常用命令", mainMenuKeyboard())
 		return
 	}
 
