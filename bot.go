@@ -708,6 +708,23 @@ type SubscriptionRequest struct {
 	Test   bool   `json:"test"`
 }
 
+// shortNetErr 网络错误 -> 简短中文原因，用于用户可见报错
+func shortNetErr(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded"):
+		return "连接超时"
+	case strings.Contains(msg, "connection refused"):
+		return "连接被拒绝"
+	case strings.Contains(msg, "no such host") || strings.Contains(msg, "dns"):
+		return "域名解析失败"
+	case strings.Contains(msg, "tls") || strings.Contains(msg, "certificate"):
+		return "TLS 握手失败"
+	default:
+		return "网络异常"
+	}
+}
+
 // addSubscriptionToAPI 添加订阅或节点到 API
 func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool, string) {
 	if !p.config.Monitor.Enabled || p.config.Monitor.SubscriptionAPI.AddURL == "" {
@@ -732,13 +749,13 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		fmt.Printf("❌ JSON 序列化失败: %v\n", err)
-		return false, fmt.Sprintf("❌ 请求失败: %v", err)
+		return false, fmt.Sprintf("❌ Bot 内部错误：请求构造失败：%v", err)
 	}
 
 	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		fmt.Printf("❌ 创建请求失败: %v\n", err)
-		return false, fmt.Sprintf("❌ 请求失败: %v", err)
+		return false, fmt.Sprintf("❌ Bot 内部错误：请求构造失败：%v", err)
 	}
 
 	req.Header.Set("X-API-Key", p.config.Monitor.SubscriptionAPI.ApiKey)
@@ -750,14 +767,14 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("❌ %s API 请求失败: %v\n", linkType, err)
-		return false, "❌ 无法连接到服务器"
+		return false, fmt.Sprintf("❌ 无法连接到订阅 API 服务器\n🔍 原因：%s\n💡 订阅链接本身没问题，请检查 API 服务状态", shortNetErr(err))
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Printf("❌ 读取响应失败: %v\n", err)
-		return false, "❌ 读取响应失败"
+		return false, fmt.Sprintf("❌ API 响应读取失败：%v", err)
 	}
 
 	// 记录原始响应（用于调试）
@@ -771,7 +788,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 		if resp.StatusCode == 200 {
 			return true, fmt.Sprintf("✅ %s添加成功", linkType)
 		}
-		return false, fmt.Sprintf("❌ %s添加失败 (状态码: %d)", linkType, resp.StatusCode)
+		return false, "❌ API 返回了无法解析的响应"
 	}
 
 	if resp.StatusCode == 200 {
@@ -909,7 +926,7 @@ func (p *MessageProcessor) addSubscriptionToAPI(link string, isNode bool) (bool,
 		errorMsg = response.Message
 	}
 	if errorMsg == "" {
-		errorMsg = fmt.Sprintf("%s添加失败 (状态码: %d)", linkType, resp.StatusCode)
+		errorMsg = fmt.Sprintf("API 返回异常（状态码: %d）", resp.StatusCode)
 	}
 
 	// fmt.Printf("[DEBUG] %s添加失败: %s\n", linkType, errorMsg)
